@@ -8,6 +8,7 @@ import streamlit as st
 import yfinance as yf
 from datetime import datetime
 import requests
+import requests_cache
 import time
 
 # ── Page config ─────────────────────────────────────────────────
@@ -372,10 +373,23 @@ def save_us(wl: list[str]):
 # ════════════════════════════════════════════════════════════════
 # ── 資料抓取 ──────────────────────────────────────────────────────
 # ════════════════════════════════════════════════════════════════
-# ── Yahoo Finance 防限流：模擬瀏覽器 Headers + 重試 ──────────────────
-def _yf_session() -> requests.Session:
-    """建立帶有瀏覽器 User-Agent 的 Session，降低 Yahoo Finance 封鎖機率"""
-    s = requests.Session()
+# ════════════════════════════════════════════════════════════════
+# ── Yahoo Finance 防限流：HTTP 層快取 + 瀏覽器 Headers ────────────────
+# ════════════════════════════════════════════════════════════════
+@st.cache_resource
+def _http_session() -> requests_cache.CachedSession:
+    """
+    建立帶有 HTTP 快取的 session（跨所有使用者共用，app 重啟前持續有效）。
+    - 相同 URL 在 270 秒內只打一次 Yahoo Finance
+    - User-Agent 模擬真實瀏覽器，降低被封鎖機率
+    """
+    s = requests_cache.CachedSession(
+        cache_name="yf_cache",
+        backend="memory",
+        expire_after=270,
+        allowable_codes=[200],
+        allowable_methods=["GET"],
+    )
     s.headers.update({
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -385,29 +399,96 @@ def _yf_session() -> requests.Session:
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
         "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
     })
     return s
 
-def _ticker(symbol: str) -> yf.Ticker:
-    """帶有 session 的 Ticker，自動重試 3 次"""
-    for attempt in range(3):
+
+def _fetch_one(symbol: str) -> dict:
+    """取得單支股票資料（不快取，由 fetch_stocks_batch 統一管理）"""
+    import re
+    try:
+        is_tw  = bool(re.match(r"^\d{4,6}$", symbol))
+        yf_sym = symbol + ".TW" if is_tw else symbol
+
+        ticker = yf.Ticker(yf_sym, session=_http_session())
+        fi     = ticker.fast_info
+        info   = ticker.info or {}
+
+        price = float(fi.last_price)     if fi.last_price     else None
+        prev  = float(fi.previous_close) if fi.previous_close else price
+        chg   = (price - prev)           if price and prev    else None
+        pct   = chg / prev * 100         if chg and prev      else None
+
+        low52  = info.get("fiftyTwoWeekLow")
+        high52 = info.get("fiftyTwoWeekHigh")
+        pos    = None
+        if price and low52 and high52 and high52 > low52:
+            pos = (price - low52) / (high52 - low52) * 100
+
+        pe       = info.get("trailingPE") or info.get("forwardPE")
+        sector   = info.get("sector", "")
+        industry = info.get("industry", "")
+        t_mean   = info.get("targetMeanPrice")
+        t_high   = info.get("targetHighPrice")
+        t_low    = info.get("targetLowPrice")
+        n_ana    = info.get("numberOfAnalystOpinions")
+        upside   = (t_mean - price) / price * 100 if t_mean and price else None
+
+        ana_date = ana_date_src = None
         try:
-            t = yf.Ticker(symbol, session=_yf_session())
-            _ = t.fast_info   # 觸發一次連線，確認可用
-            return t
+            ud = ticker.upgrades_downgrades
+            if ud is not None and not ud.empty:
+                idx = ud.index[0]
+                if hasattr(idx, "strftime"):
+                    ana_date     = idx.strftime("%Y-%m-%d")
+                    ana_date_src = "券商評等"
         except Exception:
-            if attempt < 2:
-                time.sleep(2 ** attempt)   # 1s, 2s 後重試
-    return yf.Ticker(symbol, session=_yf_session())   # 最後一次不 sleep
+            pass
+
+        if is_tw:
+            name = TW_NAMES.get(symbol, info.get("shortName", symbol))
+        else:
+            name = (info.get("shortName") or info.get("longName") or symbol)[:16]
+
+        pe_label, pe_cls, pe_ind, pe_lo, pe_hi = pe_assessment(pe, symbol, sector)
+
+        return {
+            "ok": True, "symbol": symbol, "name": name, "is_tw": is_tw,
+            "price": price, "chg": chg, "pct": pct,
+            "pe": pe, "pe_label": pe_label, "pe_cls": pe_cls,
+            "pe_ind": pe_ind, "pe_lo": pe_lo, "pe_hi": pe_hi,
+            "sector": sector, "industry": industry,
+            "low52": low52, "high52": high52, "pos": pos,
+            "t_mean": t_mean, "t_high": t_high, "t_low": t_low,
+            "n_ana": n_ana, "upside": upside,
+            "ana_date": ana_date, "ana_date_src": ana_date_src,
+        }
+    except Exception as e:
+        return {"ok": False, "symbol": symbol, "error": str(e)}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_stocks_batch(symbols: tuple) -> list:
+    """
+    批次取得股票資料，每支之間等 0.6 秒，避免 Yahoo Finance rate limit。
+    symbols 必須是 tuple（可 hash，才能被 st.cache_data 快取）。
+    """
+    results = []
+    for i, sym in enumerate(symbols):
+        if i > 0:
+            time.sleep(0.6)
+        results.append(_fetch_one(sym))
+    return results
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_global():
     results = []
-    for cfg in INDICATORS:
+    for i, cfg in enumerate(INDICATORS):
+        if i > 0:
+            time.sleep(0.3)   # 全球指標較輕，0.3 秒間隔
         try:
-            fi    = _ticker(cfg["symbol"]).fast_info
+            fi    = yf.Ticker(cfg["symbol"], session=_http_session()).fast_info
             price = float(fi.last_price)
             prev  = float(fi.previous_close or price)
             chg   = price - prev
@@ -418,13 +499,15 @@ def fetch_global():
     return results
 
 
+# ── fetch_stock 保留作向下相容（sidebar clear 用）────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_stock(symbol: str) -> dict:
+    """單支股票包裝，供需要單獨呼叫時使用"""
     try:
         is_tw  = bool(__import__("re").match(r"^\d{4,6}$", symbol))
         yf_sym = symbol + ".TW" if is_tw else symbol
 
-        ticker = _ticker(yf_sym)
+        ticker = yf.Ticker(yf_sym, session=_http_session())
         info   = ticker.info or {}
         fi     = ticker.fast_info
 
@@ -799,7 +882,7 @@ def main():
 
         st.markdown("---")
         if st.button("🔄 強制重新整理", use_container_width=True):
-            fetch_global.clear(); fetch_stock.clear(); st.rerun()
+            fetch_global.clear(); fetch_stocks_batch.clear(); fetch_stock.clear(); st.rerun()
 
         st.markdown("---")
         st.markdown("**💾 儲存個人清單**")
@@ -845,7 +928,7 @@ def main():
         with st.expander(f"🇹🇼 台股觀察名單（{len(tw_list)} 支）",
                          expanded=True):
             with st.spinner("載入台股資料…"):
-                tw_stocks = [fetch_stock(sym) for sym in tw_list]
+                tw_stocks = fetch_stocks_batch(tuple(tw_list))
             render_watchlist(tw_stocks)
 
     # ── 🇺🇸 美股（可折疊）──
@@ -853,7 +936,7 @@ def main():
         with st.expander(f"🇺🇸 美股觀察名單（{len(us_list)} 支）",
                          expanded=True):
             with st.spinner("載入美股資料…"):
-                us_stocks = [fetch_stock(sym) for sym in us_list]
+                us_stocks = fetch_stocks_batch(tuple(us_list))
             render_watchlist(us_stocks)
 
     # ── 說明欄 ──
