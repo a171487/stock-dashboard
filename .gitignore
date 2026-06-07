@@ -1,0 +1,8 @@
+watchlist.json
+*.bat
+*.vbs
+__pycache__/
+*.pyc
+*.pyo
+cf_log.txt
+.env
