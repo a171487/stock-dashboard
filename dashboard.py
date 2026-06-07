@@ -7,6 +7,8 @@
 import streamlit as st
 import yfinance as yf
 from datetime import datetime
+import requests
+import time
 
 # ── Page config ─────────────────────────────────────────────────
 st.set_page_config(
@@ -370,12 +372,42 @@ def save_us(wl: list[str]):
 # ════════════════════════════════════════════════════════════════
 # ── 資料抓取 ──────────────────────────────────────────────────────
 # ════════════════════════════════════════════════════════════════
-@st.cache_data(ttl=120, show_spinner=False)
+# ── Yahoo Finance 防限流：模擬瀏覽器 Headers + 重試 ──────────────────
+def _yf_session() -> requests.Session:
+    """建立帶有瀏覽器 User-Agent 的 Session，降低 Yahoo Finance 封鎖機率"""
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+    })
+    return s
+
+def _ticker(symbol: str) -> yf.Ticker:
+    """帶有 session 的 Ticker，自動重試 3 次"""
+    for attempt in range(3):
+        try:
+            t = yf.Ticker(symbol, session=_yf_session())
+            _ = t.fast_info   # 觸發一次連線，確認可用
+            return t
+        except Exception:
+            if attempt < 2:
+                time.sleep(2 ** attempt)   # 1s, 2s 後重試
+    return yf.Ticker(symbol, session=_yf_session())   # 最後一次不 sleep
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_global():
     results = []
     for cfg in INDICATORS:
         try:
-            fi    = yf.Ticker(cfg["symbol"]).fast_info
+            fi    = _ticker(cfg["symbol"]).fast_info
             price = float(fi.last_price)
             prev  = float(fi.previous_close or price)
             chg   = price - prev
@@ -386,13 +418,13 @@ def fetch_global():
     return results
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_stock(symbol: str) -> dict:
     try:
         is_tw  = bool(__import__("re").match(r"^\d{4,6}$", symbol))
         yf_sym = symbol + ".TW" if is_tw else symbol
 
-        ticker = yf.Ticker(yf_sym)
+        ticker = _ticker(yf_sym)
         info   = ticker.info or {}
         fi     = ticker.fast_info
 
