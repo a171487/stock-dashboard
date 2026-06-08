@@ -486,51 +486,26 @@ def _fetch_one(symbol: str) -> dict:
 
     time.sleep(1.2)
 
-    # ── Step 2: info（用 yfinance 預設 session，自動處理 cookie/crumb）
-    ticker_auth = yf.Ticker(yf_sym)
-    info = {}
-    for attempt in range(3):
-        try:
-            result = ticker_auth.info
-            if result:
-                info = result
-                break
-        except Exception:
-            pass
-        if attempt < 2:
-            time.sleep(3)
-
-    time.sleep(1.0)
-
-    # ── Step 3: upgrades_downgrades（同樣用預設 session）────────────
-    ana_date = ana_date_src = None
-    for attempt in range(2):
-        try:
-            ud = ticker_auth.upgrades_downgrades
-            if ud is not None and not ud.empty:
-                idx = ud.index[0]
-                if hasattr(idx, "strftime"):
-                    ana_date     = idx.strftime("%Y-%m-%d")
-                    ana_date_src = "券商評等"
-            break
-        except Exception:
-            if attempt < 1:
-                time.sleep(2)
+    # ── Step 2+3: fundamentals（獨立 2 小時快取，與價格快取分開）────
+    # 每次 retry 建新 Ticker，避免 yfinance 內部快取舊的失敗結果
+    fund = fetch_fundamentals(yf_sym, symbol)
 
     # ── 整合結果 ──────────────────────────────────────────────────────
-    pe       = _safe_float(info.get("trailingPE")) or _safe_float(info.get("forwardPE"))
-    sector   = info.get("sector", "")
-    industry = info.get("industry", "")
-    t_mean   = _safe_float(info.get("targetMeanPrice"))
-    t_high   = _safe_float(info.get("targetHighPrice"))
-    t_low    = _safe_float(info.get("targetLowPrice"))
-    n_ana    = info.get("numberOfAnalystOpinions")
+    pe       = fund.get("pe")
+    sector   = fund.get("sector", "")
+    industry = fund.get("industry", "")
+    t_mean   = fund.get("t_mean")
+    t_high   = fund.get("t_high")
+    t_low    = fund.get("t_low")
+    n_ana    = fund.get("n_ana")
+    ana_date = fund.get("ana_date")
+    ana_date_src = fund.get("ana_date_src")
     upside   = (t_mean - price) / price * 100 if t_mean and price else None
 
     if is_tw:
-        name = TW_NAMES.get(symbol, info.get("shortName", symbol))
+        name = TW_NAMES.get(symbol, fund.get("shortName", symbol))
     else:
-        name = (info.get("shortName") or info.get("longName") or symbol)[:16]
+        name = (fund.get("shortName") or fund.get("longName") or symbol)[:16]
 
     pe_label, pe_cls, pe_ind, pe_lo, pe_hi = pe_assessment(pe, symbol, sector)
 
@@ -544,6 +519,52 @@ def _fetch_one(symbol: str) -> dict:
         "t_mean": t_mean, "t_high": t_high, "t_low": t_low,
         "n_ana": n_ana, "upside": upside,
         "ana_date": ana_date, "ana_date_src": ana_date_src,
+    }
+
+
+@st.cache_data(ttl=7200, show_spinner=False)   # 2 小時快取，減少 rate limit
+def fetch_fundamentals(yf_sym: str, symbol: str) -> dict:
+    """
+    取得本益比、法人目標價、最新評估日。
+    與價格分開快取（2 小時），避免每 5 分鐘重打 quoteSummary API。
+    每次 retry 建立全新 Ticker 物件，防止 yfinance 內部快取舊失敗結果。
+    """
+    info = {}
+    for attempt in range(4):
+        try:
+            t = yf.Ticker(yf_sym)          # ← 每次新物件，不重用
+            result = t.info
+            if result and len(result) > 5:  # 非空結果
+                info = result
+                break
+        except Exception:
+            pass
+        if attempt < 3:
+            time.sleep(3 + attempt * 2)    # 3s, 5s, 7s 遞增等待
+
+    ana_date = ana_date_src = None
+    try:
+        ud = yf.Ticker(yf_sym).upgrades_downgrades
+        if ud is not None and not ud.empty:
+            idx = ud.index[0]
+            if hasattr(idx, "strftime"):
+                ana_date     = idx.strftime("%Y-%m-%d")
+                ana_date_src = "券商評等"
+    except Exception:
+        pass
+
+    return {
+        "pe":       _safe_float(info.get("trailingPE")) or _safe_float(info.get("forwardPE")),
+        "sector":   info.get("sector", ""),
+        "industry": info.get("industry", ""),
+        "t_mean":   _safe_float(info.get("targetMeanPrice")),
+        "t_high":   _safe_float(info.get("targetHighPrice")),
+        "t_low":    _safe_float(info.get("targetLowPrice")),
+        "n_ana":    info.get("numberOfAnalystOpinions"),
+        "shortName": info.get("shortName", ""),
+        "longName":  info.get("longName", ""),
+        "ana_date":     ana_date,
+        "ana_date_src": ana_date_src,
     }
 
 
@@ -962,7 +983,8 @@ def main():
 
         st.markdown("---")
         if st.button("🔄 強制重新整理", use_container_width=True):
-            fetch_global.clear(); fetch_stocks_batch.clear(); fetch_stock.clear(); st.rerun()
+            fetch_global.clear(); fetch_stocks_batch.clear()
+            fetch_fundamentals.clear(); fetch_stock.clear(); st.rerun()
 
         st.markdown("---")
         st.markdown("**💾 儲存個人清單**")
@@ -995,12 +1017,41 @@ def main():
 
     st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
 
+    # ══ 手機版：新增股票快捷區（桌機可用側欄；手機側欄預設收起）══
+    with st.expander("📱 新增 / 管理股票（手機版）", expanded=False):
+        m_col1, m_col2 = st.columns([3, 1])
+        m_code = m_col1.text_input("輸入代碼", placeholder="台股: 2330　美股: AAPL",
+                                   key="mobile_add_input", label_visibility="collapsed")
+        if m_col2.button("＋ 新增", key="mobile_add_btn", use_container_width=True):
+            code = m_code.strip().upper()
+            if code:
+                if is_tw_stock(code):
+                    if code not in tw_list:
+                        tw_list.append(code); save_tw(tw_list)
+                        fetch_stocks_batch.clear(); st.rerun()
+                    else:
+                        st.warning(f"{code} 已在台股清單")
+                else:
+                    if code not in us_list:
+                        us_list.append(code); save_us(us_list)
+                        fetch_stocks_batch.clear(); st.rerun()
+                    else:
+                        st.warning(f"{code} 已在美股清單")
+
+        # 目前清單（可刪除）
+        if tw_list or us_list:
+            st.caption("🇹🇼 台股：" + "　".join(tw_list) if tw_list else "")
+            st.caption("🇺🇸 美股：" + "　".join(us_list) if us_list else "")
+
+        # 書籤連結提示
+        st.info("💡 **儲存個人清單**：將目前頁面網址加入手機書籤，下次直接開書籤即可恢復你的清單。")
+
     # ══ 觀察名單 ══════════════════════════════════════════════════
     st.markdown('<div class="section-hdr">👁 我的觀察名單</div>',
                 unsafe_allow_html=True)
 
     if not tw_list and not us_list:
-        st.info("觀察名單是空的，請從左側 Sidebar 新增股票代碼。")
+        st.info("觀察名單是空的，請點上方「📱 新增 / 管理股票」或展開左側側欄新增代碼。")
         return
 
     # ── 🇹🇼 台股（可折疊）──
