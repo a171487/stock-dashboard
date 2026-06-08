@@ -322,6 +322,11 @@ TW_NAMES = {
     "0050": "台灣50", "0056": "元大高息","00878":"國泰永息","00919":"群益高息",
     "2885": "元大金", "2356": "英業達", "4938": "和碩",   "1301": "台塑",
     "1303": "南亞",   "1216": "統一",   "4904": "遠傳",   "3045": "台灣大",
+    # 補充常見股票
+    "2344": "華邦電", "3017": "奇鋐",   "2383": "台光電", "6274": "台燿",
+    "7769": "瑞鼎",   "3016": "嘉晶",   "6533": "晶心科", "2337": "旺宏",
+    "3443": "創意",   "5274": "信驊",   "6510": "精測",   "2049": "上銀",
+    "1590": "亞德客", "2308": "台達電", "2327": "國巨",   "3563": "牧德",
 }
 
 # ════════════════════════════════════════════════════════════════
@@ -422,8 +427,10 @@ def _fetch_one(symbol: str) -> dict:
     is_tw  = bool(re.match(r"^\d{4,6}$", symbol))
     yf_sym = symbol + ".TW" if is_tw else symbol
 
-    # ── Step 1: fast_info（用自訂 session，/v8/chart 不需認證）──────
+    # ── Step 1: 價格 + 52週高低 ──────────────────────────────────────
+    price = prev = chg = pct = low52 = high52 = pos = None
     try:
+        # 主要方式：fast_info（速度快，不需認證）
         ticker_fast = yf.Ticker(yf_sym, session=_http_session())
         fi     = ticker_fast.fast_info
         price  = _safe_float(fi.last_price)
@@ -432,11 +439,27 @@ def _fetch_one(symbol: str) -> dict:
         pct    = chg / prev * 100 if chg and prev else None
         low52  = _safe_float(getattr(fi, "year_low",  None))
         high52 = _safe_float(getattr(fi, "year_high", None))
-        pos    = None
         if price and low52 and high52 and high52 > low52:
             pos = (price - low52) / (high52 - low52) * 100
-    except Exception as e:
-        return {"ok": False, "symbol": symbol, "error": str(e)}
+    except Exception:
+        # 備援：yf.download()（不同 API 端點，部分股票 fast_info 會失敗）
+        try:
+            hist = yf.download(yf_sym, period="1y", progress=False,
+                               auto_adjust=True, multi_level_index=False)
+            if not hist.empty:
+                price  = _safe_float(hist["Close"].iloc[-1])
+                prev   = _safe_float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
+                chg    = (price - prev) if price and prev else None
+                pct    = chg / prev * 100 if chg and prev else None
+                low52  = _safe_float(hist["Low"].min())
+                high52 = _safe_float(hist["High"].max())
+                if price and low52 and high52 and high52 > low52:
+                    pos = (price - low52) / (high52 - low52) * 100
+        except Exception:
+            pass
+
+    if price is None:
+        return {"ok": False, "symbol": symbol, "error": "無法取得股價"}
 
     time.sleep(1.2)
 
