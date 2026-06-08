@@ -400,63 +400,84 @@ def _http_session() -> requests.Session:
     return s
 
 
+def _safe_float(val):
+    """安全轉 float，NaN / None 回傳 None"""
+    try:
+        import math
+        v = float(val)
+        return None if math.isnan(v) else v
+    except Exception:
+        return None
+
+
 def _fetch_one(symbol: str) -> dict:
     """
     取得單支股票資料（不快取，由 fetch_stocks_batch 統一管理）。
-    各子請求獨立：fast_info 失敗 → 整筆失敗；info / upgrades 失敗 → 顯示 NA。
-    每個子請求之間停頓，避免對 Yahoo Finance 爆量。
+    - Step1 fast_info：價格 + 52 週高低（使用 year_high / year_low）
+    - Step2 info：本益比 / 法人目標價（最多重試 3 次，每次間隔 2s）
+    - Step3 upgrades_downgrades：最新評估日（最多重試 2 次）
+    各步驟獨立失敗，不影響其他欄位。
     """
     import re
     is_tw  = bool(re.match(r"^\d{4,6}$", symbol))
     yf_sym = symbol + ".TW" if is_tw else symbol
 
-    # ── Step 1: fast_info（價格、52週高低）──
+    # ── Step 1: fast_info ───────────────────────────────────────────
     try:
         ticker = yf.Ticker(yf_sym, session=_http_session())
         fi     = ticker.fast_info
-        price  = float(fi.last_price)     if fi.last_price     else None
-        prev   = float(fi.previous_close) if fi.previous_close else price
-        chg    = (price - prev)           if price and prev    else None
-        pct    = chg / prev * 100         if chg and prev      else None
-        # fast_info 直接提供 52週高低，不需要 info
-        low52  = float(fi.fifty_two_week_low)  if getattr(fi, "fifty_two_week_low",  None) else None
-        high52 = float(fi.fifty_two_week_high) if getattr(fi, "fifty_two_week_high", None) else None
+        price  = _safe_float(fi.last_price)
+        prev   = _safe_float(fi.previous_close) or price
+        chg    = (price - prev) if price and prev else None
+        pct    = chg / prev * 100 if chg and prev else None
+        # yfinance FastInfo 正確屬性：year_high / year_low（非 fifty_two_week_*）
+        low52  = _safe_float(getattr(fi, "year_low",  None))
+        high52 = _safe_float(getattr(fi, "year_high", None))
         pos    = None
         if price and low52 and high52 and high52 > low52:
             pos = (price - low52) / (high52 - low52) * 100
     except Exception as e:
         return {"ok": False, "symbol": symbol, "error": str(e)}
 
-    time.sleep(0.8)   # ← 給 Yahoo Finance 喘息空間
+    time.sleep(1.5)   # fast_info → info 間隔
 
-    # ── Step 2: info（本益比、法人目標價、公司名稱）──
+    # ── Step 2: info（最多重試 3 次）──────────────────────────────────
     info = {}
-    try:
-        info = ticker.info or {}
-    except Exception:
-        pass   # info 失敗不影響其他欄位
+    for attempt in range(3):
+        try:
+            result = ticker.info
+            if result:
+                info = result
+                break
+        except Exception:
+            pass
+        if attempt < 2:
+            time.sleep(2)   # 重試前等 2 秒
 
-    time.sleep(0.5)
+    time.sleep(1.0)   # info → upgrades 間隔
 
-    # ── Step 3: upgrades_downgrades（最新評估日）──
+    # ── Step 3: upgrades_downgrades（最多重試 2 次）─────────────────
     ana_date = ana_date_src = None
-    try:
-        ud = ticker.upgrades_downgrades
-        if ud is not None and not ud.empty:
-            idx = ud.index[0]
-            if hasattr(idx, "strftime"):
-                ana_date     = idx.strftime("%Y-%m-%d")
-                ana_date_src = "券商評等"
-    except Exception:
-        pass
+    for attempt in range(2):
+        try:
+            ud = ticker.upgrades_downgrades
+            if ud is not None and not ud.empty:
+                idx = ud.index[0]
+                if hasattr(idx, "strftime"):
+                    ana_date     = idx.strftime("%Y-%m-%d")
+                    ana_date_src = "券商評等"
+            break
+        except Exception:
+            if attempt < 1:
+                time.sleep(1.5)
 
-    # ── 整合結果 ──
-    pe       = info.get("trailingPE") or info.get("forwardPE")
+    # ── 整合結果 ──────────────────────────────────────────────────────
+    pe       = _safe_float(info.get("trailingPE")) or _safe_float(info.get("forwardPE"))
     sector   = info.get("sector", "")
     industry = info.get("industry", "")
-    t_mean   = info.get("targetMeanPrice")
-    t_high   = info.get("targetHighPrice")
-    t_low    = info.get("targetLowPrice")
+    t_mean   = _safe_float(info.get("targetMeanPrice"))
+    t_high   = _safe_float(info.get("targetHighPrice"))
+    t_low    = _safe_float(info.get("targetLowPrice"))
     n_ana    = info.get("numberOfAnalystOpinions")
     upside   = (t_mean - price) / price * 100 if t_mean and price else None
 
@@ -489,7 +510,7 @@ def fetch_stocks_batch(symbols: tuple) -> list:
     results = []
     for i, sym in enumerate(symbols):
         if i > 0:
-            time.sleep(1.5)   # 每支股票之間等 1.5 秒（已含子請求內部延遲）
+            time.sleep(2.0)   # 每支股票之間等 2 秒（已含子請求內部延遲）
         results.append(_fetch_one(sym))
     return results
 
