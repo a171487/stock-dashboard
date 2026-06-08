@@ -795,7 +795,7 @@ def render_watchlist(stocks):
           <td style="min-width:120px">{date_html}</td>
         </tr>"""
 
-    st.markdown(f"""
+    st.html(f"""
     <div class="wl-wrap">
     <table class="wl-table">
       <thead><tr>
@@ -808,7 +808,7 @@ def render_watchlist(stocks):
         <th>最新評估日</th>
       </tr></thead>
       <tbody>{rows}</tbody>
-    </table></div>""", unsafe_allow_html=True)
+    </table></div>""")
 
 
 # ════════════════════════════════════════════════════════════════
