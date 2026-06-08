@@ -525,47 +525,101 @@ def _fetch_one(symbol: str) -> dict:
 @st.cache_data(ttl=7200, show_spinner=False)   # 2 小時快取，減少 rate limit
 def fetch_fundamentals(yf_sym: str, symbol: str) -> dict:
     """
-    取得本益比、法人目標價、最新評估日。
-    與價格分開快取（2 小時），避免每 5 分鐘重打 quoteSummary API。
-    每次 retry 建立全新 Ticker 物件，防止 yfinance 內部快取舊失敗結果。
+    四段式備援取得本益比、法人目標價、最新評估日。
+
+    問題根源：Yahoo Finance 從雲端 IP 有時只回傳 quoteType 基本欄位
+    （代號/交易所/幣別，約 8 個 key），沒有 PE 或目標價。
+    舊版 len > 5 的判斷太寬鬆，會誤認成功後直接 break。
+
+    修法：
+    A) ticker.info — 主要方法，嚴格驗證是否包含財務欄位
+    B) analyst_price_targets — 備援目標價（yfinance 0.2.37+，不同 endpoint）
+    C) income_stmt + market_cap — 備援 PE（timeseries API，較少被封鎖）
+    D) upgrades_downgrades — 評估日
     """
-    info = {}
-    for attempt in range(4):
+    result = {
+        "pe": None, "sector": "", "industry": "",
+        "t_mean": None, "t_high": None, "t_low": None,
+        "n_ana": None, "shortName": "", "longName": "",
+        "ana_date": None, "ana_date_src": None,
+    }
+
+    # ── A: ticker.info（主要方法；需 quoteSummary 全模組）────────────
+    # 嚴格確認有真實財務資料，而不只是 quoteType 基本欄位（8 個 key）
+    for attempt in range(3):
         try:
-            t = yf.Ticker(yf_sym)          # ← 每次新物件，不重用
-            result = t.info
-            if result and len(result) > 5:  # 非空結果
-                info = result
-                break
+            raw = yf.Ticker(yf_sym).info      # 每次新物件，防止 yfinance 內部快取
+            has_finance = (
+                raw.get("trailingPE") is not None
+                or raw.get("forwardPE") is not None
+                or raw.get("targetMeanPrice") is not None
+                or bool(raw.get("sector"))     # sector 也有意義
+            )
+            if raw and has_finance:
+                result["pe"]       = _safe_float(raw.get("trailingPE")) or _safe_float(raw.get("forwardPE"))
+                result["sector"]   = raw.get("sector", "")
+                result["industry"] = raw.get("industry", "")
+                result["t_mean"]   = _safe_float(raw.get("targetMeanPrice"))
+                result["t_high"]   = _safe_float(raw.get("targetHighPrice"))
+                result["t_low"]    = _safe_float(raw.get("targetLowPrice"))
+                result["n_ana"]    = raw.get("numberOfAnalystOpinions")
+                result["shortName"] = raw.get("shortName", "")
+                result["longName"]  = raw.get("longName", "")
+                # 若已取得 PE 與目標價，不再重試
+                if result["pe"] is not None and result["t_mean"] is not None:
+                    break
         except Exception:
             pass
-        if attempt < 3:
-            time.sleep(3 + attempt * 2)    # 3s, 5s, 7s 遞增等待
+        if attempt < 2:
+            time.sleep(2)
 
-    ana_date = ana_date_src = None
+    # ── B: analyst_price_targets（備援目標價；yfinance 0.2.37+）─────
+    # 使用不同的 Yahoo Finance endpoint，雲端被封時仍可能成功
+    if result["t_mean"] is None:
+        try:
+            apt = yf.Ticker(yf_sym).analyst_price_targets
+            if apt and isinstance(apt, dict) and apt.get("mean"):
+                result["t_mean"] = _safe_float(apt.get("mean"))
+                result["t_high"] = _safe_float(apt.get("high"))
+                result["t_low"]  = _safe_float(apt.get("low"))
+                if result["n_ana"] is None:
+                    result["n_ana"] = apt.get("numberOfAnalysts")
+        except Exception:
+            pass
+
+    # ── C: PE = 市值 ÷ 淨利（備援本益比；timeseries API 較少被封鎖）──
+    if result["pe"] is None:
+        try:
+            fi = yf.Ticker(yf_sym).fast_info
+            mc = _safe_float(getattr(fi, "market_cap", None))
+            if mc and mc > 0:
+                stmt = yf.Ticker(yf_sym).income_stmt   # timeseries API
+                if stmt is not None and not stmt.empty:
+                    for ni_key in [
+                        "Net Income",
+                        "Net Income Common Stockholders",
+                        "Net Income From Continuing Operations",
+                    ]:
+                        if ni_key in stmt.index:
+                            ni = _safe_float(stmt.loc[ni_key].iloc[0])
+                            if ni and ni > 0:
+                                result["pe"] = round(mc / ni, 1)
+                            break   # 找到對應列即停（不論 ni 正負）
+        except Exception:
+            pass
+
+    # ── D: upgrades_downgrades（評估日）─────────────────────────────
     try:
         ud = yf.Ticker(yf_sym).upgrades_downgrades
         if ud is not None and not ud.empty:
             idx = ud.index[0]
             if hasattr(idx, "strftime"):
-                ana_date     = idx.strftime("%Y-%m-%d")
-                ana_date_src = "券商評等"
+                result["ana_date"]     = idx.strftime("%Y-%m-%d")
+                result["ana_date_src"] = "券商評等"
     except Exception:
         pass
 
-    return {
-        "pe":       _safe_float(info.get("trailingPE")) or _safe_float(info.get("forwardPE")),
-        "sector":   info.get("sector", ""),
-        "industry": info.get("industry", ""),
-        "t_mean":   _safe_float(info.get("targetMeanPrice")),
-        "t_high":   _safe_float(info.get("targetHighPrice")),
-        "t_low":    _safe_float(info.get("targetLowPrice")),
-        "n_ana":    info.get("numberOfAnalystOpinions"),
-        "shortName": info.get("shortName", ""),
-        "longName":  info.get("longName", ""),
-        "ana_date":     ana_date,
-        "ana_date_src": ana_date_src,
-    }
+    return result
 
 
 @st.cache_data(ttl=300, show_spinner=False)
