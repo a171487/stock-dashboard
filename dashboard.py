@@ -324,7 +324,7 @@ TW_NAMES = {
     "1303": "南亞",   "1216": "統一",   "4904": "遠傳",   "3045": "台灣大",
     # 補充常見股票
     "2344": "華邦電", "3017": "奇鋐",   "2383": "台光電", "6274": "台燿",
-    "7769": "瑞鼎",   "3016": "嘉晶",   "6533": "晶心科", "2337": "旺宏",
+    "7769": "鴻勁",   "3016": "嘉晶",   "6533": "晶心科", "2337": "旺宏",
     "3443": "創意",   "5274": "信驊",   "6510": "精測",   "2049": "上銀",
     "1590": "亞德客", "2308": "台達電", "2327": "國巨",   "3563": "牧德",
 }
@@ -425,38 +425,61 @@ def _fetch_one(symbol: str) -> dict:
     """
     import re
     is_tw  = bool(re.match(r"^\d{4,6}$", symbol))
-    yf_sym = symbol + ".TW" if is_tw else symbol
 
-    # ── Step 1: 價格 + 52週高低 ──────────────────────────────────────
+    # ── Step 1: 價格 + 52週高低（自動嘗試 .TW → .TWO）──────────────
+    # 台灣股票分兩市：上市(.TW) / 上櫃(.TWO)，先試 .TW，失敗改 .TWO
     price = prev = chg = pct = low52 = high52 = pos = None
-    try:
-        # 主要方式：fast_info（速度快，不需認證）
-        ticker_fast = yf.Ticker(yf_sym, session=_http_session())
-        fi     = ticker_fast.fast_info
-        price  = _safe_float(fi.last_price)
-        prev   = _safe_float(fi.previous_close) or price
-        chg    = (price - prev) if price and prev else None
-        pct    = chg / prev * 100 if chg and prev else None
-        low52  = _safe_float(getattr(fi, "year_low",  None))
-        high52 = _safe_float(getattr(fi, "year_high", None))
-        if price and low52 and high52 and high52 > low52:
-            pos = (price - low52) / (high52 - low52) * 100
-    except Exception:
-        # 備援：yf.download()（不同 API 端點，部分股票 fast_info 會失敗）
+    yf_sym = symbol + ".TW" if is_tw else symbol   # 預設
+
+    def _try_price(sym: str):
+        nonlocal price, prev, chg, pct, low52, high52, pos
         try:
-            hist = yf.download(yf_sym, period="1y", progress=False,
-                               auto_adjust=True, multi_level_index=False)
-            if not hist.empty:
-                price  = _safe_float(hist["Close"].iloc[-1])
-                prev   = _safe_float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
-                chg    = (price - prev) if price and prev else None
-                pct    = chg / prev * 100 if chg and prev else None
-                low52  = _safe_float(hist["Low"].min())
-                high52 = _safe_float(hist["High"].max())
-                if price and low52 and high52 and high52 > low52:
-                    pos = (price - low52) / (high52 - low52) * 100
+            fi = yf.Ticker(sym, session=_http_session()).fast_info
+            price  = _safe_float(fi.last_price)
+            if not price:
+                return False
+            prev   = _safe_float(fi.previous_close) or price
+            chg    = (price - prev) if price and prev else None
+            pct    = chg / prev * 100 if chg and prev else None
+            low52  = _safe_float(getattr(fi, "year_low",  None))
+            high52 = _safe_float(getattr(fi, "year_high", None))
+            if price and low52 and high52 and high52 > low52:
+                pos = (price - low52) / (high52 - low52) * 100
+            return True
         except Exception:
-            pass
+            return False
+
+    def _try_price_dl(sym: str):
+        """備援：yf.download()，同時取 52 週高低"""
+        nonlocal price, prev, chg, pct, low52, high52, pos
+        try:
+            hist = yf.download(sym, period="1y", progress=False,
+                               auto_adjust=True, multi_level_index=False)
+            if hist.empty:
+                return False
+            price  = _safe_float(hist["Close"].iloc[-1])
+            if not price:
+                return False
+            prev   = _safe_float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
+            chg    = (price - prev) if price and prev else None
+            pct    = chg / prev * 100 if chg and prev else None
+            low52  = _safe_float(hist["Low"].min())
+            high52 = _safe_float(hist["High"].max())
+            if price and low52 and high52 and high52 > low52:
+                pos = (price - low52) / (high52 - low52) * 100
+            return True
+        except Exception:
+            return False
+
+    if is_tw:
+        # 嘗試順序：.TW fast_info → .TW download → .TWO fast_info → .TWO download
+        if not _try_price(symbol + ".TW"):
+            if not _try_price_dl(symbol + ".TW"):
+                if _try_price(symbol + ".TWO") or _try_price_dl(symbol + ".TWO"):
+                    yf_sym = symbol + ".TWO"   # 上櫃股票，後續 info 也用此 symbol
+    else:
+        if not _try_price(symbol):
+            _try_price_dl(symbol)
 
     if price is None:
         return {"ok": False, "symbol": symbol, "error": "無法取得股價"}
@@ -464,7 +487,6 @@ def _fetch_one(symbol: str) -> dict:
     time.sleep(1.2)
 
     # ── Step 2: info（用 yfinance 預設 session，自動處理 cookie/crumb）
-    # 不傳 session= ，讓 yfinance 自己管 OAuth 認證，避免認證失敗
     ticker_auth = yf.Ticker(yf_sym)
     info = {}
     for attempt in range(3):
