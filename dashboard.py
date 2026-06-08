@@ -6,9 +6,14 @@
 
 import streamlit as st
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import requests
 import time
+
+TW_TZ = timezone(timedelta(hours=8))   # 台灣時區 UTC+8
+
+def now_tw() -> datetime:
+    return datetime.now(TW_TZ)
 
 # ── Page config ─────────────────────────────────────────────────
 st.set_page_config(
@@ -323,7 +328,7 @@ TW_NAMES = {
 # ── 全球指標定義 ──────────────────────────────────────────────────
 # ════════════════════════════════════════════════════════════════
 INDICATORS = [
-    {"label": "USD/JPY\n日幣匯率",   "symbol": "JPY=X",     "dec": 2, "src": "Yahoo Finance"},
+    {"label": "USD/JPY\n日幣匯率",   "symbol": "USDJPY=X",  "dec": 2, "src": "Yahoo Finance"},
     {"label": "美債10年期利率",       "symbol": "^TNX",      "dec": 3, "suffix": "%", "src": "Yahoo Finance"},
     {"label": "台指期\n(現貨代理)",   "symbol": "^TWII",     "dec": 0, "src": "Yahoo Finance",
      "note": "※夜盤需TAIFEX"},
@@ -396,67 +401,83 @@ def _http_session() -> requests.Session:
 
 
 def _fetch_one(symbol: str) -> dict:
-    """取得單支股票資料（不快取，由 fetch_stocks_batch 統一管理）"""
+    """
+    取得單支股票資料（不快取，由 fetch_stocks_batch 統一管理）。
+    各子請求獨立：fast_info 失敗 → 整筆失敗；info / upgrades 失敗 → 顯示 NA。
+    每個子請求之間停頓，避免對 Yahoo Finance 爆量。
+    """
     import re
-    try:
-        is_tw  = bool(re.match(r"^\d{4,6}$", symbol))
-        yf_sym = symbol + ".TW" if is_tw else symbol
+    is_tw  = bool(re.match(r"^\d{4,6}$", symbol))
+    yf_sym = symbol + ".TW" if is_tw else symbol
 
+    # ── Step 1: fast_info（價格、52週高低）──
+    try:
         ticker = yf.Ticker(yf_sym, session=_http_session())
         fi     = ticker.fast_info
-        info   = ticker.info or {}
-
-        price = float(fi.last_price)     if fi.last_price     else None
-        prev  = float(fi.previous_close) if fi.previous_close else price
-        chg   = (price - prev)           if price and prev    else None
-        pct   = chg / prev * 100         if chg and prev      else None
-
-        low52  = info.get("fiftyTwoWeekLow")
-        high52 = info.get("fiftyTwoWeekHigh")
+        price  = float(fi.last_price)     if fi.last_price     else None
+        prev   = float(fi.previous_close) if fi.previous_close else price
+        chg    = (price - prev)           if price and prev    else None
+        pct    = chg / prev * 100         if chg and prev      else None
+        # fast_info 直接提供 52週高低，不需要 info
+        low52  = float(fi.fifty_two_week_low)  if getattr(fi, "fifty_two_week_low",  None) else None
+        high52 = float(fi.fifty_two_week_high) if getattr(fi, "fifty_two_week_high", None) else None
         pos    = None
         if price and low52 and high52 and high52 > low52:
             pos = (price - low52) / (high52 - low52) * 100
-
-        pe       = info.get("trailingPE") or info.get("forwardPE")
-        sector   = info.get("sector", "")
-        industry = info.get("industry", "")
-        t_mean   = info.get("targetMeanPrice")
-        t_high   = info.get("targetHighPrice")
-        t_low    = info.get("targetLowPrice")
-        n_ana    = info.get("numberOfAnalystOpinions")
-        upside   = (t_mean - price) / price * 100 if t_mean and price else None
-
-        ana_date = ana_date_src = None
-        try:
-            ud = ticker.upgrades_downgrades
-            if ud is not None and not ud.empty:
-                idx = ud.index[0]
-                if hasattr(idx, "strftime"):
-                    ana_date     = idx.strftime("%Y-%m-%d")
-                    ana_date_src = "券商評等"
-        except Exception:
-            pass
-
-        if is_tw:
-            name = TW_NAMES.get(symbol, info.get("shortName", symbol))
-        else:
-            name = (info.get("shortName") or info.get("longName") or symbol)[:16]
-
-        pe_label, pe_cls, pe_ind, pe_lo, pe_hi = pe_assessment(pe, symbol, sector)
-
-        return {
-            "ok": True, "symbol": symbol, "name": name, "is_tw": is_tw,
-            "price": price, "chg": chg, "pct": pct,
-            "pe": pe, "pe_label": pe_label, "pe_cls": pe_cls,
-            "pe_ind": pe_ind, "pe_lo": pe_lo, "pe_hi": pe_hi,
-            "sector": sector, "industry": industry,
-            "low52": low52, "high52": high52, "pos": pos,
-            "t_mean": t_mean, "t_high": t_high, "t_low": t_low,
-            "n_ana": n_ana, "upside": upside,
-            "ana_date": ana_date, "ana_date_src": ana_date_src,
-        }
     except Exception as e:
         return {"ok": False, "symbol": symbol, "error": str(e)}
+
+    time.sleep(0.8)   # ← 給 Yahoo Finance 喘息空間
+
+    # ── Step 2: info（本益比、法人目標價、公司名稱）──
+    info = {}
+    try:
+        info = ticker.info or {}
+    except Exception:
+        pass   # info 失敗不影響其他欄位
+
+    time.sleep(0.5)
+
+    # ── Step 3: upgrades_downgrades（最新評估日）──
+    ana_date = ana_date_src = None
+    try:
+        ud = ticker.upgrades_downgrades
+        if ud is not None and not ud.empty:
+            idx = ud.index[0]
+            if hasattr(idx, "strftime"):
+                ana_date     = idx.strftime("%Y-%m-%d")
+                ana_date_src = "券商評等"
+    except Exception:
+        pass
+
+    # ── 整合結果 ──
+    pe       = info.get("trailingPE") or info.get("forwardPE")
+    sector   = info.get("sector", "")
+    industry = info.get("industry", "")
+    t_mean   = info.get("targetMeanPrice")
+    t_high   = info.get("targetHighPrice")
+    t_low    = info.get("targetLowPrice")
+    n_ana    = info.get("numberOfAnalystOpinions")
+    upside   = (t_mean - price) / price * 100 if t_mean and price else None
+
+    if is_tw:
+        name = TW_NAMES.get(symbol, info.get("shortName", symbol))
+    else:
+        name = (info.get("shortName") or info.get("longName") or symbol)[:16]
+
+    pe_label, pe_cls, pe_ind, pe_lo, pe_hi = pe_assessment(pe, symbol, sector)
+
+    return {
+        "ok": True, "symbol": symbol, "name": name, "is_tw": is_tw,
+        "price": price, "chg": chg, "pct": pct,
+        "pe": pe, "pe_label": pe_label, "pe_cls": pe_cls,
+        "pe_ind": pe_ind, "pe_lo": pe_lo, "pe_hi": pe_hi,
+        "sector": sector, "industry": industry,
+        "low52": low52, "high52": high52, "pos": pos,
+        "t_mean": t_mean, "t_high": t_high, "t_low": t_low,
+        "n_ana": n_ana, "upside": upside,
+        "ana_date": ana_date, "ana_date_src": ana_date_src,
+    }
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -468,7 +489,7 @@ def fetch_stocks_batch(symbols: tuple) -> list:
     results = []
     for i, sym in enumerate(symbols):
         if i > 0:
-            time.sleep(0.6)
+            time.sleep(1.5)   # 每支股票之間等 1.5 秒（已含子請求內部延遲）
         results.append(_fetch_one(sym))
     return results
 
@@ -600,7 +621,7 @@ def date_freshness(date_str):
     if not date_str or not re.match(r"^\d{4}-\d{2}-\d{2}$", str(date_str)):
         return "na-txt", "—"
     try:
-        delta = (datetime.now() - datetime.strptime(date_str, "%Y-%m-%d")).days
+        delta = (now_tw().replace(tzinfo=None) - datetime.strptime(date_str, "%Y-%m-%d")).days
         if delta <= 90:
             return "date-fresh", f"{date_str}　✓ 近期"
         elif delta <= 180:
@@ -883,7 +904,7 @@ def main():
         st.caption("⚠️ 來源：Yahoo Finance，僅供參考")
 
     # ══ 頁首 ══════════════════════════════════════════════════════
-    now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
+    now_str = now_tw().strftime("%Y/%m/%d %H:%M")  # 台灣時間 UTC+8
     st.markdown(f"""
     <div class="app-header">
       <div>
