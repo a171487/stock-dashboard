@@ -8,7 +8,6 @@ import streamlit as st
 import yfinance as yf
 from datetime import datetime
 import requests
-import requests_cache
 import time
 
 # ── Page config ─────────────────────────────────────────────────
@@ -377,19 +376,12 @@ def save_us(wl: list[str]):
 # ── Yahoo Finance 防限流：HTTP 層快取 + 瀏覽器 Headers ────────────────
 # ════════════════════════════════════════════════════════════════
 @st.cache_resource
-def _http_session() -> requests_cache.CachedSession:
+def _http_session() -> requests.Session:
     """
-    建立帶有 HTTP 快取的 session（跨所有使用者共用，app 重啟前持續有效）。
-    - 相同 URL 在 270 秒內只打一次 Yahoo Finance
-    - User-Agent 模擬真實瀏覽器，降低被封鎖機率
+    建立瀏覽器模擬 Session（跨所有使用者共用，app 重啟前持續有效）。
+    注意：yfinance 新版不支援 requests_cache，改用純 requests.Session。
     """
-    s = requests_cache.CachedSession(
-        cache_name="yf_cache",
-        backend="memory",
-        expire_after=270,
-        allowable_codes=[200],
-        allowable_methods=["GET"],
-    )
+    s = requests.Session()
     s.headers.update({
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
