@@ -422,15 +422,14 @@ def _fetch_one(symbol: str) -> dict:
     is_tw  = bool(re.match(r"^\d{4,6}$", symbol))
     yf_sym = symbol + ".TW" if is_tw else symbol
 
-    # ── Step 1: fast_info ───────────────────────────────────────────
+    # ── Step 1: fast_info（用自訂 session，/v8/chart 不需認證）──────
     try:
-        ticker = yf.Ticker(yf_sym, session=_http_session())
-        fi     = ticker.fast_info
+        ticker_fast = yf.Ticker(yf_sym, session=_http_session())
+        fi     = ticker_fast.fast_info
         price  = _safe_float(fi.last_price)
         prev   = _safe_float(fi.previous_close) or price
         chg    = (price - prev) if price and prev else None
         pct    = chg / prev * 100 if chg and prev else None
-        # yfinance FastInfo 正確屬性：year_high / year_low（非 fifty_two_week_*）
         low52  = _safe_float(getattr(fi, "year_low",  None))
         high52 = _safe_float(getattr(fi, "year_high", None))
         pos    = None
@@ -439,28 +438,30 @@ def _fetch_one(symbol: str) -> dict:
     except Exception as e:
         return {"ok": False, "symbol": symbol, "error": str(e)}
 
-    time.sleep(1.5)   # fast_info → info 間隔
+    time.sleep(1.2)
 
-    # ── Step 2: info（最多重試 3 次）──────────────────────────────────
+    # ── Step 2: info（用 yfinance 預設 session，自動處理 cookie/crumb）
+    # 不傳 session= ，讓 yfinance 自己管 OAuth 認證，避免認證失敗
+    ticker_auth = yf.Ticker(yf_sym)
     info = {}
     for attempt in range(3):
         try:
-            result = ticker.info
+            result = ticker_auth.info
             if result:
                 info = result
                 break
         except Exception:
             pass
         if attempt < 2:
-            time.sleep(2)   # 重試前等 2 秒
+            time.sleep(3)
 
-    time.sleep(1.0)   # info → upgrades 間隔
+    time.sleep(1.0)
 
-    # ── Step 3: upgrades_downgrades（最多重試 2 次）─────────────────
+    # ── Step 3: upgrades_downgrades（同樣用預設 session）────────────
     ana_date = ana_date_src = None
     for attempt in range(2):
         try:
-            ud = ticker.upgrades_downgrades
+            ud = ticker_auth.upgrades_downgrades
             if ud is not None and not ud.empty:
                 idx = ud.index[0]
                 if hasattr(idx, "strftime"):
@@ -469,7 +470,7 @@ def _fetch_one(symbol: str) -> dict:
             break
         except Exception:
             if attempt < 1:
-                time.sleep(1.5)
+                time.sleep(2)
 
     # ── 整合結果 ──────────────────────────────────────────────────────
     pe       = _safe_float(info.get("trailingPE")) or _safe_float(info.get("forwardPE"))
