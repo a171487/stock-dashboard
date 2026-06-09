@@ -509,6 +509,10 @@ def _fetch_one(symbol: str) -> dict:
 
     pe_label, pe_cls, pe_ind, pe_lo, pe_hi = pe_assessment(pe, symbol, sector)
 
+    # ── Step 4: 選股信號（技術指標，獨立快取 5 min）────────────────────
+    is_tpex = yf_sym.endswith(".TWO")
+    tech = fetch_technical(yf_sym, symbol, is_tw, is_tpex)
+
     return {
         "ok": True, "symbol": symbol, "name": name, "is_tw": is_tw,
         "price": price, "chg": chg, "pct": pct,
@@ -519,6 +523,12 @@ def _fetch_one(symbol: str) -> dict:
         "t_mean": t_mean, "t_high": t_high, "t_low": t_low,
         "n_ana": n_ana, "upside": upside,
         "ana_date": ana_date, "ana_date_src": ana_date_src,
+        # 選股信號
+        "k_val":     tech.get("k_val"),
+        "k_ok":      tech.get("k_ok",  False),
+        "margin_ok": tech.get("margin_ok"),   # True/False/None(N/A)
+        "ma20_ok":   tech.get("ma20_ok", False),
+        "tech_score": tech.get("score", 0),
     }
 
 
@@ -619,6 +629,143 @@ def fetch_fundamentals(yf_sym: str, symbol: str) -> dict:
     except Exception:
         pass
 
+    return result
+
+
+# ════════════════════════════════════════════════════════════════
+# ── 選股信號：技術指標計算 ─────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_tw_margin_change(symbol: str, is_tpex: bool = False):
+    """
+    查詢最近 5 個交易日融資餘額是否淨增加。
+    - 上市(TWSE)：呼叫 TWSE MI_MARGN API
+    - 上櫃(TPEX)：呼叫 TPEX marbalance API（日期使用民國年）
+    回傳 True=增加 / False=減少或持平 / None=無資料或錯誤
+    """
+    try:
+        now = now_tw()
+        hdr = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json, text/plain, */*",
+        }
+
+        if is_tpex:
+            # ── TPEX（上櫃）：日期格式 民國年/MM/DD ─────────────────
+            roc_year = now.year - 1911
+            date_str = f"{roc_year}/{now.month:02d}/{now.day:02d}"
+            url = (
+                "https://www.tpex.org.tw/web/stock/margin_trading/"
+                "margin_balance/marbalance_result.php"
+            )
+            params = {"l": "zh-tw", "o": "json", "d": date_str, "s": symbol}
+            hdr["Referer"] = "https://www.tpex.org.tw/"
+            r = requests.get(url, params=params, headers=hdr, timeout=6)
+            data  = r.json()
+            rows  = data.get("aaData", [])
+            # TPEX 欄位：日期(0) 買進(1) 賣出(2) 現償(3) 餘額(4) 增減(5)
+            bal_idx = 4
+        else:
+            # ── TWSE（上市）：日期格式 YYYYMMDD ─────────────────────
+            date_str = now.strftime("%Y%m%d")
+            url = "https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN"
+            params = {"date": date_str, "stockNo": symbol, "response": "json"}
+            hdr["Referer"] = "https://www.twse.com.tw/"
+            r = requests.get(url, params=params, headers=hdr, timeout=6)
+            data = r.json()
+            if data.get("stat") != "OK":
+                return None
+            rows = data.get("data", [])
+            # 動態尋找「融資餘額」欄位位置
+            bal_idx = 4   # 預設 index
+            for i, fname in enumerate(data.get("fields", [])):
+                if "融資" in fname and "餘額" in fname:
+                    bal_idx = i
+                    break
+
+        if not rows or len(rows) < 2:
+            return None
+
+        recent = rows[-5:] if len(rows) >= 5 else rows
+        if len(recent) < 2:
+            return None
+
+        first_bal = float(str(recent[0][bal_idx]).replace(",", ""))
+        last_bal  = float(str(recent[-1][bal_idx]).replace(",", ""))
+        return last_bal > first_bal   # True = 增加
+
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_technical(yf_sym: str, symbol: str, is_tw: bool, is_tpex: bool) -> dict:
+    """
+    計算三項選股條件並回傳分數（0–3）：
+    ① K值 < 40  ── 9期KD隨機指標（台灣慣用 α=1/3 指數平滑）
+    ② 近5日融資增加 ── 僅台股；美股回傳 margin_ok=None（N/A，不計分）
+    ③ 收盤 > 20MA 且 20MA 上升
+    """
+    result = {
+        "k_val":     None,
+        "k_ok":      False,
+        "margin_ok": None,    # True / False / None(N/A)
+        "ma20_ok":   False,
+        "score":     0,
+    }
+
+    # ── ①③：下載60日歷史計算技術指標 ──────────────────────────────
+    try:
+        hist = yf.download(
+            yf_sym, period="60d", progress=False,
+            auto_adjust=True, multi_level_index=False,
+        )
+        if hist.empty or len(hist) < 20:
+            return result
+
+        close = hist["Close"].dropna()
+        high  = hist["High"].dropna()
+        low   = hist["Low"].dropna()
+
+        # ① K值：9期RSV → 指數平滑（α=1/3，等效 2/3×Kprev + 1/3×RSV）
+        if len(close) >= 9:
+            n     = 9
+            ll    = low.rolling(window=n).min()
+            hh    = high.rolling(window=n).max()
+            denom = (hh - ll).replace(0.0, float("nan"))
+            rsv   = (close - ll) / denom * 100
+            rsv   = rsv.fillna(50.0)          # 分母為0時預設50
+            k_ser = rsv.ewm(alpha=1/3, adjust=False).mean()
+            k_val = float(k_ser.iloc[-1])
+            result["k_val"] = round(k_val, 1)
+            result["k_ok"]  = k_val < 40.0
+
+        # ③ 收盤 > 20MA 且 20MA 今日 > 昨日
+        if len(close) >= 21:
+            ma20   = close.rolling(window=20).mean()
+            cur_ma = float(ma20.iloc[-1])
+            prv_ma = float(ma20.iloc[-2])
+            cur_c  = float(close.iloc[-1])
+            result["ma20_ok"] = (cur_c > cur_ma) and (cur_ma > prv_ma)
+
+    except Exception:
+        pass
+
+    # ── ②：融資（僅台股）────────────────────────────────────────────
+    if is_tw:
+        result["margin_ok"] = fetch_tw_margin_change(symbol, is_tpex)
+
+    # ── 加總分數 ──────────────────────────────────────────────────
+    result["score"] = sum([
+        bool(result["k_ok"]),
+        result["margin_ok"] is True,   # None(N/A) 不計分
+        bool(result["ma20_ok"]),
+    ])
     return result
 
 
@@ -923,6 +1070,34 @@ def render_watchlist(stocks):
         else:
             date_html = '<span class="na-txt">—</span>'
 
+        # ── 選股信號（K值 / 融資 / 20MA）──
+        score  = s.get("tech_score", 0)
+        k_ok   = s.get("k_ok",  False)
+        m_ok   = s.get("margin_ok")     # True / False / None(N/A)
+        ma_ok  = s.get("ma20_ok", False)
+        k_v    = s.get("k_val")
+        _is_tw = s.get("is_tw", False)
+
+        # 條件狀態：🟢達成 / 🔴未達成 / ⬜N/A
+        k_dot  = "🟢" if k_ok  else "🔴"
+        m_dot  = ("🟢" if m_ok is True
+                  else ("🔴" if m_ok is False else "⬜"))
+        ma_dot = "🟢" if ma_ok else "🔴"
+
+        k_lbl  = (f"K={k_v:.0f}" if k_v is not None else "K=?")
+        m_lbl  = "融資" if _is_tw else "融(—)"
+        ma_lbl = "均線"
+
+        chk_str = "✅" * score if score > 0 else '<span class="na-txt" style="font-size:0.8rem">—</span>'
+        signal_html = (
+            f'<div style="text-align:center;line-height:1.2">'
+            f'  <div style="font-size:1.1rem;letter-spacing:2px">{chk_str}</div>'
+            f'  <div style="font-size:0.61rem;color:#64748b;margin-top:5px;white-space:nowrap">'
+            f'    {k_dot}&thinsp;{k_lbl}&emsp;{m_dot}&thinsp;{m_lbl}&emsp;{ma_dot}&thinsp;{ma_lbl}'
+            f'  </div>'
+            f'</div>'
+        )
+
         rows += f"""<tr>
           <td class="left">
             <div class="stk-code">{sym}</div>
@@ -935,6 +1110,7 @@ def render_watchlist(stocks):
           <td style="min-width:185px">{pos_html}{rng}</td>
           <td style="min-width:155px">{target_html}</td>
           <td style="min-width:120px">{date_html}</td>
+          <td style="min-width:115px;text-align:center">{signal_html}</td>
         </tr>"""
 
     st.html(f"""
@@ -948,6 +1124,7 @@ def render_watchlist(stocks):
         <th>52 週位階</th>
         <th>法人目標價</th>
         <th>最新評估日</th>
+        <th>選股信號</th>
       </tr></thead>
       <tbody>{rows}</tbody>
     </table></div>""")
@@ -1038,7 +1215,9 @@ def main():
         st.markdown("---")
         if st.button("🔄 強制重新整理", use_container_width=True):
             fetch_global.clear(); fetch_stocks_batch.clear()
-            fetch_fundamentals.clear(); fetch_stock.clear(); st.rerun()
+            fetch_fundamentals.clear(); fetch_stock.clear()
+            fetch_technical.clear(); fetch_tw_margin_change.clear()
+            st.rerun()
 
         st.markdown("---")
         st.markdown("**💾 儲存個人清單**")
