@@ -1283,6 +1283,32 @@ def main():
     st.markdown('<div class="section-hdr">👁 我的觀察名單</div>',
                 unsafe_allow_html=True)
 
+    # ── 選股邏輯說明條 ──
+    st.markdown("""
+<div style="
+  background:linear-gradient(90deg,#eff6ff 0%,#f8fbff 100%);
+  border:1px solid #bfdbfe; border-left:4px solid #2563eb;
+  border-radius:0 12px 12px 0; padding:11px 18px; margin-bottom:14px;
+  display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+">
+  <span style="font-size:0.74rem;font-weight:800;color:#1e40af;
+               margin-right:8px;white-space:nowrap;">📌 目前選股邏輯</span>
+  <span style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:20px;
+               padding:3px 11px;font-size:0.73rem;font-weight:700;color:#065f46;
+               white-space:nowrap;">① K值 &lt; 40</span>
+  <span style="color:#cbd5e1;font-size:0.8rem">＋</span>
+  <span style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:20px;
+               padding:3px 11px;font-size:0.73rem;font-weight:700;color:#065f46;
+               white-space:nowrap;">② 近5日融資增加（台股）</span>
+  <span style="color:#cbd5e1;font-size:0.8rem">＋</span>
+  <span style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:20px;
+               padding:3px 11px;font-size:0.73rem;font-weight:700;color:#065f46;
+               white-space:nowrap;">③ 收盤價 &gt; 20日均線且均線上升</span>
+  <span style="font-size:0.63rem;color:#94a3b8;margin-left:6px;white-space:nowrap;">
+    三項全達成 ✅✅✅ · 二項 ✅✅ · 一項 ✅（美股②不適用）
+  </span>
+</div>""", unsafe_allow_html=True)
+
     if not tw_list and not us_list:
         st.info("觀察名單是空的，請點上方「📱 新增 / 管理股票」或展開左側側欄新增代碼。")
         return
