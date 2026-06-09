@@ -81,8 +81,8 @@ section[data-testid="stSidebar"] .stTextInput input::placeholder { color: #4a7aa
              text-transform: uppercase; letter-spacing: 0.5px; line-height: 1.4; }
 .ind-value { font-size: 1.42rem; font-weight: 900; color: #0f172a;
              line-height: 1; letter-spacing: -0.5px; margin: 4px 0; }
-.ind-up   { font-size: 0.79rem; color: #059669; font-weight: 700; }
-.ind-down { font-size: 0.79rem; color: #dc2626; font-weight: 700; }
+.ind-up   { font-size: 0.79rem; color: #dc2626; font-weight: 700; }
+.ind-down { font-size: 0.79rem; color: #059669; font-weight: 700; }
 .ind-neu  { font-size: 0.79rem; color: #94a3b8; }
 .ind-note { font-size: 0.59rem; color: #94a3b8; margin-top: 2px; }
 .ind-src  { font-size: 0.57rem; color: #cbd5e1; margin-top: 2px; text-align: right; }
@@ -115,8 +115,8 @@ section[data-testid="stSidebar"] .stTextInput input::placeholder { color: #4a7aa
 
 .price   { font-weight: 800; font-size: 1.02rem; color: #0f172a; }
 .chg-sub { font-size: 0.74rem; margin-top: 2px; }
-.up      { color: #059669; font-weight: 700; }
-.down    { color: #dc2626; font-weight: 700; }
+.up      { color: #dc2626; font-weight: 700; }
+.down    { color: #059669; font-weight: 700; }
 .neutral { color: #94a3b8; }
 
 /* P/E column */
@@ -156,8 +156,8 @@ section[data-testid="stSidebar"] .stTextInput input::placeholder { color: #4a7aa
 
 /* Target price */
 .target-val { font-weight: 800; color: #0f172a; }
-.up-pct { color: #059669; font-weight: 700; font-size: 0.85rem; }
-.dn-pct { color: #dc2626; font-weight: 700; font-size: 0.85rem; }
+.up-pct { color: #dc2626; font-weight: 700; font-size: 0.85rem; }
+.dn-pct { color: #059669; font-weight: 700; font-size: 0.85rem; }
 .ana-cnt { font-size: 0.69rem; color: #94a3b8; font-weight: 400; }
 .date-txt { font-size: 0.73rem; color: #94a3b8; }
 .date-fresh { font-size: 0.71rem; color: #059669; font-weight: 600; }
@@ -957,9 +957,9 @@ def render_global(data):
                     pstr = f"{price:.{dec}f}{suf}"
 
                 if pct > 0:
-                    border_color, chg_cls, arrow = "#10b981", "ind-up", "▲"
+                    border_color, chg_cls, arrow = "#ef4444", "ind-up", "▲"   # 台灣慣例：紅漲
                 elif pct < 0:
-                    border_color, chg_cls, arrow = "#ef4444", "ind-down", "▼"
+                    border_color, chg_cls, arrow = "#10b981", "ind-down", "▼"  # 台灣慣例：綠跌
                 else:
                     border_color, chg_cls, arrow = "#94a3b8", "ind-neu", "─"
 
