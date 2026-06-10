@@ -1401,6 +1401,58 @@ def main():
         # 書籤連結提示
         st.info("💡 **儲存個人清單**：將目前頁面網址加入手機書籤，下次直接開書籤即可恢復你的清單。")
 
+    # ══ 跨裝置同步（主畫面版，手機不用開側欄）══════════════════════
+    cur_key = st.session_state.get("profile_key", "")
+    sync_label = f"🔗 跨裝置同步　✅ 代號：{cur_key}" if cur_key else "🔗 跨裝置同步（電腦 ↔ 手機）"
+    with st.expander(sync_label, expanded=not bool(cur_key)):
+        st.markdown(
+            "電腦和手機輸入**相同代號**，清單自動同步。"
+            "　改了一台後，另一台點「**拉取更新**」即可。",
+            unsafe_allow_html=False)
+        sc1, sc2, sc3 = st.columns([3, 1, 1])
+        key_input = sc1.text_input(
+            "同步代號",
+            value=cur_key,
+            placeholder="自訂代號，例如 mystock88",
+            label_visibility="collapsed",
+            key="main_sync_key_input",
+        )
+        if sc2.button("套用", key="main_sync_apply", use_container_width=True):
+            nk = key_input.strip()
+            if nk:
+                tw_p, us_p, ts = load_profile(nk)
+                if tw_p is not None:
+                    st.session_state.tw_list     = tw_p
+                    st.session_state.us_list     = us_p
+                    st.session_state.profile_key = nk
+                    st.query_params["key"] = nk
+                    save_tw(tw_p); save_us(us_p)
+                    st.success(f"已載入代號「{nk}」的清單（上次更新 {ts}）")
+                else:
+                    save_profile(nk, tw_list, us_list)
+                    st.session_state.profile_key = nk
+                    st.query_params["key"] = nk
+                    st.success(f"已建立新代號「{nk}」，目前清單已儲存")
+            else:
+                st.session_state.profile_key = ""
+                st.query_params.pop("key", None)
+                st.info("已清除同步代號")
+            st.rerun()
+        if sc3.button("拉取更新", key="main_sync_pull",
+                      use_container_width=True, disabled=not bool(cur_key)):
+            tw_p, us_p, ts = load_profile(cur_key)
+            if tw_p is not None:
+                st.session_state.tw_list = tw_p
+                st.session_state.us_list = us_p
+                save_tw(tw_p); save_us(us_p)
+                st.success(f"已從代號「{cur_key}」拉取最新清單（{ts}）")
+            else:
+                st.warning("找不到同步資料，請重新套用代號")
+            st.rerun()
+        if cur_key:
+            _, _, ts = load_profile(cur_key)
+            st.caption(f"上次同步：{ts}　｜　將含有 ?key={cur_key} 的網址加入書籤，下次自動載入")
+
     # ══ 觀察名單 ══════════════════════════════════════════════════
     st.markdown('<div class="section-hdr">👁 我的觀察名單</div>',
                 unsafe_allow_html=True)
