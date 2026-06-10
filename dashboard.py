@@ -639,65 +639,36 @@ def fetch_fundamentals(yf_sym: str, symbol: str) -> dict:
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_tw_margin_change(symbol: str, is_tpex: bool = False):
     """
-    查詢最近 5 個交易日融資餘額是否淨增加。
-    - 上市(TWSE)：呼叫 TWSE MI_MARGN API
-    - 上櫃(TPEX)：呼叫 TPEX marbalance API（日期使用民國年）
+    查詢最近 5 個交易日融資餘額（MarginPurchaseTodayBalance）是否淨增加。
+    使用 FinMind 開放 API（免費、上市+上櫃皆支援）。
     回傳 True=增加 / False=減少或持平 / None=無資料或錯誤
     """
     try:
-        now = now_tw()
-        hdr = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/125.0.0.0 Safari/537.36"
-            ),
-            "Accept": "application/json, text/plain, */*",
+        start_date = (now_tw() - timedelta(days=14)).strftime("%Y-%m-%d")
+        url = "https://api.finmindtrade.com/api/v4/data"
+        params = {
+            "dataset":   "TaiwanStockMarginPurchaseShortSale",
+            "data_id":   symbol,
+            "start_date": start_date,
         }
+        r = requests.get(url, params=params, timeout=8)
+        data = r.json()
 
-        if is_tpex:
-            # ── TPEX（上櫃）：日期格式 民國年/MM/DD ─────────────────
-            roc_year = now.year - 1911
-            date_str = f"{roc_year}/{now.month:02d}/{now.day:02d}"
-            url = (
-                "https://www.tpex.org.tw/web/stock/margin_trading/"
-                "margin_balance/marbalance_result.php"
-            )
-            params = {"l": "zh-tw", "o": "json", "d": date_str, "s": symbol}
-            hdr["Referer"] = "https://www.tpex.org.tw/"
-            r = requests.get(url, params=params, headers=hdr, timeout=6)
-            data  = r.json()
-            rows  = data.get("aaData", [])
-            # TPEX 欄位：日期(0) 買進(1) 賣出(2) 現償(3) 餘額(4) 增減(5)
-            bal_idx = 4
-        else:
-            # ── TWSE（上市）：日期格式 YYYYMMDD ─────────────────────
-            date_str = now.strftime("%Y%m%d")
-            url = "https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN"
-            params = {"date": date_str, "stockNo": symbol, "response": "json"}
-            hdr["Referer"] = "https://www.twse.com.tw/"
-            r = requests.get(url, params=params, headers=hdr, timeout=6)
-            data = r.json()
-            if data.get("stat") != "OK":
-                return None
-            rows = data.get("data", [])
-            # 動態尋找「融資餘額」欄位位置
-            bal_idx = 4   # 預設 index
-            for i, fname in enumerate(data.get("fields", [])):
-                if "融資" in fname and "餘額" in fname:
-                    bal_idx = i
-                    break
+        if data.get("status") != 200:
+            return None
 
+        rows = data.get("data", [])
         if not rows or len(rows) < 2:
             return None
 
+        # 取最近 5 個交易日
         recent = rows[-5:] if len(rows) >= 5 else rows
         if len(recent) < 2:
             return None
 
-        first_bal = float(str(recent[0][bal_idx]).replace(",", ""))
-        last_bal  = float(str(recent[-1][bal_idx]).replace(",", ""))
-        return last_bal > first_bal   # True = 增加
+        first_bal = int(recent[0].get("MarginPurchaseTodayBalance", 0))
+        last_bal  = int(recent[-1].get("MarginPurchaseTodayBalance", 0))
+        return last_bal > first_bal   # True = 融資餘額增加
 
     except Exception:
         return None
