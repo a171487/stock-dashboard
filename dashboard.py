@@ -1049,22 +1049,24 @@ def render_watchlist(stocks):
         k_v    = s.get("k_val")
         _is_tw = s.get("is_tw", False)
 
-        # 條件狀態：🟢達成 / 🔴未達成 / ⬜N/A
+        # 條件狀態：🟢達成 / 🔴未達成
         k_dot  = "🟢" if k_ok  else "🔴"
-        m_dot  = ("🟢" if m_ok is True
-                  else ("🔴" if m_ok is False else "⬜"))
         ma_dot = "🟢" if ma_ok else "🔴"
-
         k_lbl  = (f"K={k_v:.0f}" if k_v is not None else "K=?")
-        m_lbl  = "融資" if _is_tw else "融(—)"
-        ma_lbl = "均線"
+
+        # 融資條件：僅台股顯示，美股直接省略
+        if _is_tw:
+            m_dot  = "🟢" if m_ok is True else "🔴"
+            margin_part = f"&emsp;{m_dot}&thinsp;融資"
+        else:
+            margin_part = ""   # 美股不顯示融資
 
         chk_str = "✅" * score if score > 0 else '<span class="na-txt" style="font-size:0.8rem">—</span>'
         signal_html = (
             f'<div style="text-align:center;line-height:1.2">'
             f'  <div style="font-size:1.1rem;letter-spacing:2px">{chk_str}</div>'
             f'  <div style="font-size:0.61rem;color:#64748b;margin-top:5px;white-space:nowrap">'
-            f'    {k_dot}&thinsp;{k_lbl}&emsp;{m_dot}&thinsp;{m_lbl}&emsp;{ma_dot}&thinsp;{ma_lbl}'
+            f'    {k_dot}&thinsp;{k_lbl}{margin_part}&emsp;{ma_dot}&thinsp;均線'
             f'  </div>'
             f'</div>'
         )
