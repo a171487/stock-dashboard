@@ -61,9 +61,9 @@ section[data-testid="stSidebar"] .stTextInput input::placeholder { color: #4a7aa
 
 .section-hdr {
     display: flex; align-items: center; gap: 10px;
-    font-size: 0.8rem; font-weight: 700; color: #1e40af;
+    font-size: 1.15rem; font-weight: 700; color: #1e40af;
     text-transform: uppercase; letter-spacing: 0.8px;
-    padding: 9px 16px;
+    padding: 11px 18px;
     background: linear-gradient(90deg, rgba(37,99,235,0.08) 0%, transparent 70%);
     border-left: 4px solid #2563eb; border-radius: 0 10px 10px 0; margin-bottom: 16px;
 }
