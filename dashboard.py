@@ -1054,6 +1054,9 @@ def render_watchlist(stocks):
               <td colspan="6" class="na-txt" style="text-align:center">資料載入失敗</td></tr>"""
             continue
 
+        # 台股名稱：渲染時直接查 TW_NAMES，確保不受快取影響
+        display_name = TW_NAMES.get(sym, s["name"]) if s.get("is_tw") else s["name"]
+
         # ── 現價 ──
         p     = s["price"]
         p_str = fmt(p, dec=0 if (p and p >= 100) else 2) if p else "—"
@@ -1176,7 +1179,7 @@ def render_watchlist(stocks):
         rows += f"""<tr>
           <td class="left">
             <div class="stk-code">{sym}</div>
-            <div class="stk-name">{s['name']}</div>
+            <div class="stk-name">{display_name}</div>
             {ind_tag}
           </td>
           <td><div class="price">{p_str}</div>{chg_sub}</td>
