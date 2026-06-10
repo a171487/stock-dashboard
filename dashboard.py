@@ -9,6 +9,9 @@ import yfinance as yf
 from datetime import datetime, timezone, timedelta
 import requests
 import time
+import json
+import hashlib
+from pathlib import Path
 
 TW_TZ = timezone(timedelta(hours=8))   # 台灣時區 UTC+8
 
@@ -355,29 +358,73 @@ import re as _re
 def is_tw_stock(code: str) -> bool:
     return bool(_re.match(r"^\d{4,6}$", code))
 
-# ── Watchlist: URL query params（tw= 台股，us= 美股）────────────────
-# 舊版 w= 自動遷移
-def load_watchlists() -> tuple[list[str], list[str]]:
+# ════════════════════════════════════════════════════════════════
+# ── 跨裝置同步：Server-side profile（/tmp 共享）─────────────────────
+# ════════════════════════════════════════════════════════════════
+_PROFILE_DIR = Path("/tmp/stock_profiles")
+
+def _profile_path(key: str) -> Path:
+    safe = hashlib.sha256(key.encode()).hexdigest()[:20]
+    return _PROFILE_DIR / f"{safe}.json"
+
+def load_profile(key: str):
+    """讀取 profile 檔案。回傳 (tw, us, timestamp_str) 或 (None, None, None)。"""
+    try:
+        _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        p = _profile_path(key)
+        if p.exists():
+            d = json.loads(p.read_text(encoding="utf-8"))
+            return d.get("tw", []), d.get("us", []), d.get("ts", "")
+    except Exception:
+        pass
+    return None, None, None
+
+def save_profile(key: str, tw: list, us: list):
+    """寫入 profile 檔案，同時附上更新時間。"""
+    try:
+        _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        _profile_path(key).write_text(
+            json.dumps({"tw": tw, "us": us,
+                        "ts": now_tw().strftime("%m/%d %H:%M")},
+                       ensure_ascii=False),
+            encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+# ── Watchlist: URL query params（tw= 台股，us= 美股）+ profile sync ──
+def load_watchlists():
+    """讀取清單：優先用 profile 檔案（若有 key），其次 URL params。"""
     old_w  = st.query_params.get("w",  "")
     tw_raw = st.query_params.get("tw", "")
     us_raw = st.query_params.get("us", "")
+    key    = st.query_params.get("key", "").strip()
 
     if old_w and not tw_raw and not us_raw:
-        # 從舊格式自動分類
         stocks = [s.strip().upper() for s in old_w.split(",") if s.strip()]
         tw = [s for s in stocks if is_tw_stock(s)]
         us = [s for s in stocks if not is_tw_stock(s)]
-        return (tw or list(DEFAULT_TW)), (us or list(DEFAULT_US))
+        tw = tw or list(DEFAULT_TW); us = us or list(DEFAULT_US)
+    else:
+        tw = [s.strip().upper() for s in tw_raw.split(",") if s.strip()] if tw_raw else list(DEFAULT_TW)
+        us = [s.strip().upper() for s in us_raw.split(",") if s.strip()] if us_raw else list(DEFAULT_US)
 
-    tw = [s.strip().upper() for s in tw_raw.split(",") if s.strip()] if tw_raw else list(DEFAULT_TW)
-    us = [s.strip().upper() for s in us_raw.split(",") if s.strip()] if us_raw else list(DEFAULT_US)
-    return tw, us
+    if key:
+        tw_p, us_p, _ = load_profile(key)
+        if tw_p is not None:
+            tw, us = tw_p, us_p   # profile 覆蓋 URL params
+
+    return tw, us, key
 
 def save_tw(wl: list[str]):
     st.query_params["tw"] = ",".join(wl)
+    if k := st.session_state.get("profile_key", ""):
+        save_profile(k, wl, st.session_state.get("us_list", []))
 
 def save_us(wl: list[str]):
     st.query_params["us"] = ",".join(wl)
+    if k := st.session_state.get("profile_key", ""):
+        save_profile(k, st.session_state.get("tw_list", []), wl)
 
 # ════════════════════════════════════════════════════════════════
 # ── 資料抓取 ──────────────────────────────────────────────────────
@@ -1185,9 +1232,13 @@ def _sidebar_list(wl: list[str], key_prefix: str, save_fn, name_map: dict):
 def main():
     # ── 初始化 session state ──
     if "tw_list" not in st.session_state or "us_list" not in st.session_state:
-        tw, us = load_watchlists()
-        st.session_state.tw_list = tw
-        st.session_state.us_list = us
+        tw, us, key = load_watchlists()
+        st.session_state.tw_list    = tw
+        st.session_state.us_list    = us
+        st.session_state.profile_key = key
+        # 若 key 存在但 profile 檔尚未建立，以目前 URL 清單建立 profile
+        if key and load_profile(key)[0] is None:
+            save_profile(key, tw, us)
 
     tw_list = st.session_state.tw_list
     us_list = st.session_state.us_list
@@ -1243,9 +1294,56 @@ def main():
             fetch_technical.clear(); fetch_tw_margin_change.clear()
             st.rerun()
 
+        # ── 跨裝置同步代號 ──────────────────────────────────────────
         st.markdown("---")
-        st.markdown("**💾 儲存個人清單**")
-        st.caption("將網址列加入書籤，下次打開即是你的清單。")
+        st.markdown("**🔗 跨裝置同步**")
+        cur_key = st.session_state.get("profile_key", "")
+        new_key = st.text_input(
+            "同步代號",
+            value=cur_key,
+            placeholder="自訂代號（如 mystock88）",
+            help="電腦和手機填入相同代號，清單自動同步"
+        )
+        col_apply, col_pull = st.columns(2)
+        with col_apply:
+            if st.button("套用", use_container_width=True):
+                nk = new_key.strip()
+                if nk:
+                    tw_p, us_p, ts = load_profile(nk)
+                    if tw_p is not None:
+                        # 已有 profile → 載入
+                        st.session_state.tw_list    = tw_p
+                        st.session_state.us_list    = us_p
+                        st.session_state.profile_key = nk
+                        st.query_params["key"] = nk
+                        save_tw(tw_p); save_us(us_p)
+                    else:
+                        # 新代號 → 以目前清單建立
+                        save_profile(nk, tw_list, us_list)
+                        st.session_state.profile_key = nk
+                        st.query_params["key"] = nk
+                else:
+                    st.session_state.profile_key = ""
+                    st.query_params.pop("key", None)
+                st.rerun()
+        with col_pull:
+            pull_disabled = not bool(cur_key)
+            if st.button("拉取更新", use_container_width=True, disabled=pull_disabled):
+                tw_p, us_p, ts = load_profile(cur_key)
+                if tw_p is not None:
+                    st.session_state.tw_list = tw_p
+                    st.session_state.us_list = us_p
+                    save_tw(tw_p); save_us(us_p)
+                st.rerun()
+
+        if cur_key:
+            _, _, ts = load_profile(cur_key)
+            ts_str = f"· 上次更新 {ts}" if ts else ""
+            st.caption(f"✅ 同步中：**{cur_key}**　{ts_str}")
+        else:
+            st.caption("未設定代號，清單僅存在目前網址")
+
+        st.markdown("---")
         st.caption("• 資料每 2 分鐘自動更新")
         st.caption("⚠️ 來源：Yahoo Finance，僅供參考")
 
