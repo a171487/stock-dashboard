@@ -494,11 +494,13 @@ def _fetch_one(symbol: str) -> dict:
     pe       = fund.get("pe")
     sector   = fund.get("sector", "")
     industry = fund.get("industry", "")
-    t_mean   = fund.get("t_mean")
-    t_high   = fund.get("t_high")
-    t_low    = fund.get("t_low")
-    n_ana    = fund.get("n_ana")
-    ana_date = fund.get("ana_date")
+    t_mean       = fund.get("t_mean")
+    t_high       = fund.get("t_high")
+    t_low        = fund.get("t_low")
+    n_ana        = fund.get("n_ana")
+    n_ana_recent = fund.get("n_ana_recent")
+    n_ana_total  = fund.get("n_ana_total")
+    ana_date     = fund.get("ana_date")
     ana_date_src = fund.get("ana_date_src")
     upside   = (t_mean - price) / price * 100 if t_mean and price else None
 
@@ -521,7 +523,8 @@ def _fetch_one(symbol: str) -> dict:
         "sector": sector, "industry": industry,
         "low52": low52, "high52": high52, "pos": pos,
         "t_mean": t_mean, "t_high": t_high, "t_low": t_low,
-        "n_ana": n_ana, "upside": upside,
+        "n_ana": n_ana, "n_ana_recent": n_ana_recent, "n_ana_total": n_ana_total,
+        "upside": upside,
         "ana_date": ana_date, "ana_date_src": ana_date_src,
         # 選股信號
         "k_val":     tech.get("k_val"),
@@ -550,7 +553,8 @@ def fetch_fundamentals(yf_sym: str, symbol: str) -> dict:
     result = {
         "pe": None, "sector": "", "industry": "",
         "t_mean": None, "t_high": None, "t_low": None,
-        "n_ana": None, "shortName": "", "longName": "",
+        "n_ana": None, "n_ana_recent": None, "n_ana_total": None,
+        "shortName": "", "longName": "",
         "ana_date": None, "ana_date_src": None,
     }
 
@@ -618,7 +622,7 @@ def fetch_fundamentals(yf_sym: str, symbol: str) -> dict:
         except Exception:
             pass
 
-    # ── D: upgrades_downgrades（評估日）─────────────────────────────
+    # ── D: upgrades_downgrades（評估日 + 歷史追蹤家數）──────────────
     try:
         ud = yf.Ticker(yf_sym).upgrades_downgrades
         if ud is not None and not ud.empty:
@@ -626,6 +630,21 @@ def fetch_fundamentals(yf_sym: str, symbol: str) -> dict:
             if hasattr(idx, "strftime"):
                 result["ana_date"]     = idx.strftime("%Y-%m-%d")
                 result["ana_date_src"] = "券商評等"
+            if "Firm" in ud.columns:
+                result["n_ana_total"] = int(ud["Firm"].nunique())
+    except Exception:
+        pass
+
+    # ── E: recommendations_summary（近期追蹤家數，0m 期間合計）────
+    try:
+        recs = yf.Ticker(yf_sym).recommendations_summary
+        if recs is not None and not recs.empty:
+            row = recs[recs["period"] == "0m"]
+            if not row.empty:
+                cols = [c for c in ["strongBuy","buy","hold","sell","strongSell"] if c in row.columns]
+                total = int(row[cols].sum(axis=1).iloc[0])
+                if total > 0:
+                    result["n_ana_recent"] = total
     except Exception:
         pass
 
@@ -804,17 +823,33 @@ def fetch_stock(symbol: str) -> dict:
         n_ana   = info.get("numberOfAnalystOpinions")
         upside  = (t_mean - price) / price * 100 if t_mean and price else None
 
-        # ── 法人評估日期：取 upgrades_downgrades 最新一筆（必須是真實日期格式）──
+        # ── 法人評估日期 + 歷史追蹤家數 ──
         ana_date     = None
         ana_date_src = None
+        n_ana_recent = None
+        n_ana_total  = None
         try:
             ud = ticker.upgrades_downgrades
             if ud is not None and not ud.empty:
                 idx = ud.index[0]
-                # 確認是 datetime/Timestamp，不接受純數字或月份索引
                 if hasattr(idx, "strftime"):
                     ana_date     = idx.strftime("%Y-%m-%d")
                     ana_date_src = "券商評等"
+                if "Firm" in ud.columns:
+                    n_ana_total = int(ud["Firm"].nunique())
+        except Exception:
+            pass
+
+        # ── 近期追蹤家數（recommendations_summary 0m 合計）──
+        try:
+            recs = ticker.recommendations_summary
+            if recs is not None and not recs.empty:
+                row = recs[recs["period"] == "0m"]
+                if not row.empty:
+                    cols = [c for c in ["strongBuy","buy","hold","sell","strongSell"] if c in row.columns]
+                    total = int(row[cols].sum(axis=1).iloc[0])
+                    if total > 0:
+                        n_ana_recent = total
         except Exception:
             pass
 
@@ -835,7 +870,8 @@ def fetch_stock(symbol: str) -> dict:
             "sector": sector, "industry": industry,
             "low52": low52, "high52": high52, "pos": pos,
             "t_mean": t_mean, "t_high": t_high, "t_low": t_low,
-            "n_ana": n_ana, "upside": upside,
+            "n_ana": n_ana, "n_ana_recent": n_ana_recent, "n_ana_total": n_ana_total,
+            "upside": upside,
             "ana_date": ana_date, "ana_date_src": ana_date_src,
         }
     except Exception as e:
@@ -1018,17 +1054,31 @@ def render_watchlist(stocks):
         # ── 法人目標價 ──
         t_mean = s["t_mean"]
         if t_mean:
-            t_str  = fmt(t_mean, dec=0 if t_mean >= 100 else 2)
-            up     = s["upside"]
-            up_cls = "up-pct" if up and up >= 0 else "dn-pct"
-            sign   = "+" if up and up >= 0 else ""
-            n      = f'<span class="ana-cnt">({int(s["n_ana"])}家券商)</span>' if s.get("n_ana") else ""
-            up_str = f'<div class="{up_cls}">{sign}{up:.1f}% 上漲空間</div>' if up is not None else ""
-            target_html = f'<div class="target-val">{t_str} {n}</div>{up_str}'
+            t_str    = fmt(t_mean, dec=0 if t_mean >= 100 else 2)
+            up       = s["upside"]
+            up_cls   = "up-pct" if up and up >= 0 else "dn-pct"
+            sign     = "+" if up and up >= 0 else ""
+            up_str   = f'<div class="{up_cls}">{sign}{up:.1f}% 上漲空間</div>' if up is not None else ""
+            target_html = f'<div class="target-val">{t_str}</div>{up_str}'
             if s.get("t_low") and s.get("t_high"):
                 tlo = fmt(s["t_low"],  dec=0 if s["t_low"]  >= 100 else 2)
                 thi = fmt(s["t_high"], dec=0 if s["t_high"] >= 100 else 2)
                 target_html += f'<div class="date-txt">目標區間 {tlo}~{thi}</div>'
+            # 券商追蹤家數：近半年活躍家數｜歷史總計（來自 upgrades_downgrades 唯一券商數）
+            n_recent = s.get("n_ana_recent")
+            n_ud     = s.get("n_ana_total")    # None for TW（Yahoo 無 upgrades_downgrades 資料）
+            n_base   = int(s["n_ana"]) if s.get("n_ana") else None
+            n_total  = n_ud or n_base          # 優先用 upgrades 唯一家數，備援 numberOfAnalystOpinions
+            if n_recent and n_total and n_total != n_recent:
+                ana_line = f'近半年{n_recent}家｜共{n_total}家'
+            elif n_recent:
+                ana_line = f'追蹤{n_recent}家券商'
+            elif n_total:
+                ana_line = f'{n_total}家券商'
+            else:
+                ana_line = ""
+            if ana_line:
+                target_html += f'<div class="ana-cnt">{ana_line}</div>'
         else:
             target_html = '<span class="na-txt">—</span>'
 
