@@ -77,25 +77,25 @@ section[data-testid="stSidebar"] .stTextInput input::placeholder { color: #4a7aa
     transition: box-shadow 0.2s, transform 0.2s; position: relative;
 }
 .ind-card:hover { box-shadow: 0 6px 28px rgba(30,58,95,0.13); transform: translateY(-1px); }
-.ind-label { font-size: 0.65rem; color: #64748b; font-weight: 700;
+.ind-label { font-size: 0.75rem; color: #64748b; font-weight: 700;
              text-transform: uppercase; letter-spacing: 0.5px; line-height: 1.4; }
-.ind-value { font-size: 1.42rem; font-weight: 900; color: #0f172a;
+.ind-value { font-size: 1.6rem; font-weight: 900; color: #0f172a;
              line-height: 1; letter-spacing: -0.5px; margin: 4px 0; }
-.ind-up   { font-size: 0.79rem; color: #dc2626; font-weight: 700; }
-.ind-down { font-size: 0.79rem; color: #059669; font-weight: 700; }
-.ind-neu  { font-size: 0.79rem; color: #94a3b8; }
-.ind-note { font-size: 0.59rem; color: #94a3b8; margin-top: 2px; }
-.ind-src  { font-size: 0.57rem; color: #cbd5e1; margin-top: 2px; text-align: right; }
+.ind-up   { font-size: 0.9rem; color: #dc2626; font-weight: 700; }
+.ind-down { font-size: 0.9rem; color: #059669; font-weight: 700; }
+.ind-neu  { font-size: 0.9rem; color: #94a3b8; }
+.ind-note { font-size: 0.68rem; color: #94a3b8; margin-top: 2px; }
+.ind-src  { font-size: 0.65rem; color: #cbd5e1; margin-top: 2px; text-align: right; }
 
 /* Watchlist */
 .wl-wrap {
     overflow-x: auto; border-radius: 16px; border: 1px solid #dde4f0;
     background: #ffffff; box-shadow: 0 4px 28px rgba(30,58,95,0.08);
 }
-.wl-table { width: 100%; border-collapse: collapse; font-size: 0.87rem; }
+.wl-table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
 .wl-table thead th {
     background: linear-gradient(180deg, #f1f5fd 0%, #e8eef8 100%);
-    color: #475569; font-weight: 700; font-size: 0.69rem;
+    color: #475569; font-weight: 700; font-size: 0.78rem;
     text-transform: uppercase; letter-spacing: 0.5px;
     padding: 13px 14px; text-align: right; white-space: nowrap;
     border-bottom: 2px solid #dde4f0;
@@ -108,47 +108,47 @@ section[data-testid="stSidebar"] .stTextInput input::placeholder { color: #4a7aa
 .wl-table tbody td { padding: 12px 14px; vertical-align: middle; text-align: right; }
 .wl-table tbody td.left { text-align: left; }
 
-.stk-code { font-weight: 900; color: #1d4ed8; font-size: 0.96rem; }
-.stk-name { font-size: 0.71rem; color: #94a3b8; margin-top: 2px; }
-.stk-ind  { font-size: 0.66rem; color: #93c5fd; margin-top: 1px;
+.stk-code { font-weight: 900; color: #1d4ed8; font-size: 1.06rem; }
+.stk-name { font-size: 0.82rem; color: #94a3b8; margin-top: 2px; }
+.stk-ind  { font-size: 0.75rem; color: #93c5fd; margin-top: 1px;
             background: rgba(37,99,235,0.07); padding: 1px 5px; border-radius: 4px; display: inline-block; }
 
-.price   { font-weight: 800; font-size: 1.02rem; color: #0f172a; }
-.chg-sub { font-size: 0.74rem; margin-top: 2px; }
+.price   { font-weight: 800; font-size: 1.12rem; color: #0f172a; }
+.chg-sub { font-size: 0.84rem; margin-top: 2px; }
 .up      { color: #dc2626; font-weight: 700; }
 .down    { color: #059669; font-weight: 700; }
 .neutral { color: #94a3b8; }
 
 /* P/E column */
-.pe-val  { font-weight: 800; font-size: 0.98rem; }
+.pe-val  { font-weight: 800; font-size: 1.08rem; }
 .pe-ok   { color: #059669; }
 .pe-mid  { color: #d97706; }
 .pe-high { color: #dc2626; }
 .pe-assess {
     display: inline-flex; align-items: center; gap: 3px;
-    font-size: 0.68rem; font-weight: 700; padding: 2px 7px;
+    font-size: 0.78rem; font-weight: 700; padding: 2px 8px;
     border-radius: 10px; margin-top: 3px; white-space: nowrap;
 }
 .pe-a-low  { background: #d1fae5; color: #065f46; border: 1px solid #6ee7b7; }
 .pe-a-mid  { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
 .pe-a-high { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
-.pe-ind-avg { font-size: 0.65rem; color: #94a3b8; margin-top: 2px; }
+.pe-ind-avg { font-size: 0.75rem; color: #94a3b8; margin-top: 2px; }
 
 /* Position badges */
 .badge-low  {
     background: linear-gradient(135deg,#d1fae5,#a7f3d0); color: #064e3b;
-    border: 1px solid #6ee7b7; padding: 3px 10px; border-radius: 20px;
-    font-size: 0.71rem; font-weight: 700; white-space: nowrap;
+    border: 1px solid #6ee7b7; padding: 3px 11px; border-radius: 20px;
+    font-size: 0.81rem; font-weight: 700; white-space: nowrap;
 }
 .badge-mid  {
     background: linear-gradient(135deg,#fef3c7,#fde68a); color: #78350f;
-    border: 1px solid #fcd34d; padding: 3px 10px; border-radius: 20px;
-    font-size: 0.71rem; font-weight: 700; white-space: nowrap;
+    border: 1px solid #fcd34d; padding: 3px 11px; border-radius: 20px;
+    font-size: 0.81rem; font-weight: 700; white-space: nowrap;
 }
 .badge-high {
     background: linear-gradient(135deg,#fee2e2,#fecaca); color: #7f1d1d;
-    border: 1px solid #fca5a5; padding: 3px 10px; border-radius: 20px;
-    font-size: 0.71rem; font-weight: 700; white-space: nowrap;
+    border: 1px solid #fca5a5; padding: 3px 11px; border-radius: 20px;
+    font-size: 0.81rem; font-weight: 700; white-space: nowrap;
 }
 .pos-bar  { display:inline-block; width:52px; height:5px;
             background:#e2e8f0; border-radius:3px; vertical-align:middle; }
@@ -156,15 +156,15 @@ section[data-testid="stSidebar"] .stTextInput input::placeholder { color: #4a7aa
 
 /* Target price */
 .target-val { font-weight: 800; color: #0f172a; }
-.up-pct { color: #dc2626; font-weight: 700; font-size: 0.85rem; }
-.dn-pct { color: #059669; font-weight: 700; font-size: 0.85rem; }
-.ana-cnt { font-size: 0.69rem; color: #94a3b8; font-weight: 400; }
-.date-txt { font-size: 0.73rem; color: #94a3b8; }
-.date-fresh { font-size: 0.71rem; color: #059669; font-weight: 600; }
-.date-old   { font-size: 0.71rem; color: #d97706; font-weight: 600; }
+.up-pct { color: #dc2626; font-weight: 700; font-size: 0.95rem; }
+.dn-pct { color: #059669; font-weight: 700; font-size: 0.95rem; }
+.ana-cnt { font-size: 0.79rem; color: #94a3b8; font-weight: 400; }
+.date-txt { font-size: 0.83rem; color: #94a3b8; }
+.date-fresh { font-size: 0.81rem; color: #059669; font-weight: 600; }
+.date-old   { font-size: 0.81rem; color: #d97706; font-weight: 600; }
 
 .na-txt { color: #cbd5e1; }
-.src-tag { font-size: 0.58rem; color: #cbd5e1; }
+.src-tag { font-size: 0.68rem; color: #cbd5e1; }
 
 .footer-note {
     margin-top: 16px; padding: 10px 16px;
@@ -1111,11 +1111,11 @@ def render_watchlist(stocks):
         else:
             margin_part = ""   # 美股不顯示融資
 
-        chk_str = "✅" * score if score > 0 else '<span class="na-txt" style="font-size:0.8rem">—</span>'
+        chk_str = "✅" * score if score > 0 else '<span class="na-txt" style="font-size:0.9rem">—</span>'
         signal_html = (
             f'<div style="text-align:center;line-height:1.2">'
-            f'  <div style="font-size:1.1rem;letter-spacing:2px">{chk_str}</div>'
-            f'  <div style="font-size:0.61rem;color:#64748b;margin-top:5px;white-space:nowrap">'
+            f'  <div style="font-size:1.2rem;letter-spacing:2px">{chk_str}</div>'
+            f'  <div style="font-size:0.72rem;color:#64748b;margin-top:5px;white-space:nowrap">'
             f'    {k_dot}&thinsp;{k_lbl}{margin_part}&emsp;{ma_dot}&thinsp;均線'
             f'  </div>'
             f'</div>'
@@ -1164,7 +1164,8 @@ def _sidebar_list(wl: list[str], key_prefix: str, save_fn, name_map: dict):
     for i, sym in enumerate(list(wl)):
         cn, cup, cdn, cdel = st.columns([3.2, 0.7, 0.7, 0.7])
         cn.markdown(
-            f"**{sym}**&nbsp;<span style='color:#4a7aa0;font-size:0.72rem'>"
+            f"<span style='font-size:0.95rem;font-weight:700;color:#dbeafe'>{sym}</span>"
+            f"&nbsp;<span style='color:#7ab4d8;font-size:0.88rem'>"
             f"{name_map.get(sym,'')}</span>",
             unsafe_allow_html=True)
         if cup.button("↑", key=f"{key_prefix}up_{sym}",
@@ -1218,7 +1219,7 @@ def main():
         # ── 台股清單 ──
         st.markdown("---")
         tw_hdr = (f"🇹🇼 台股清單（{len(tw_list)} 支）　"
-                  f"<span style='font-size:0.7rem;color:#4a7aa0'>↑↓ 排序</span>")
+                  f"<span style='font-size:0.82rem;color:#4a7aa0'>↑↓ 排序</span>")
         st.markdown(f"**{tw_hdr}**", unsafe_allow_html=True)
         if tw_list:
             _sidebar_list(tw_list, "tw_", save_tw, TW_NAMES)
@@ -1228,7 +1229,7 @@ def main():
         # ── 美股清單 ──
         st.markdown("---")
         us_hdr = (f"🇺🇸 美股清單（{len(us_list)} 支）　"
-                  f"<span style='font-size:0.7rem;color:#4a7aa0'>↑↓ 排序</span>")
+                  f"<span style='font-size:0.82rem;color:#4a7aa0'>↑↓ 排序</span>")
         st.markdown(f"**{us_hdr}**", unsafe_allow_html=True)
         if us_list:
             _sidebar_list(us_list, "us_", save_us, {})
@@ -1314,20 +1315,20 @@ def main():
   border-radius:0 12px 12px 0; padding:11px 18px; margin-bottom:14px;
   display:flex; align-items:center; gap:6px; flex-wrap:wrap;
 ">
-  <span style="font-size:0.74rem;font-weight:800;color:#1e40af;
+  <span style="font-size:0.86rem;font-weight:800;color:#1e40af;
                margin-right:8px;white-space:nowrap;">📌 目前選股邏輯</span>
   <span style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:20px;
-               padding:3px 11px;font-size:0.73rem;font-weight:700;color:#065f46;
+               padding:4px 13px;font-size:0.84rem;font-weight:700;color:#065f46;
                white-space:nowrap;">① K值 &lt; 40</span>
-  <span style="color:#cbd5e1;font-size:0.8rem">＋</span>
+  <span style="color:#cbd5e1;font-size:0.9rem">＋</span>
   <span style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:20px;
-               padding:3px 11px;font-size:0.73rem;font-weight:700;color:#065f46;
+               padding:4px 13px;font-size:0.84rem;font-weight:700;color:#065f46;
                white-space:nowrap;">② 近5日融資增加（台股）</span>
-  <span style="color:#cbd5e1;font-size:0.8rem">＋</span>
+  <span style="color:#cbd5e1;font-size:0.9rem">＋</span>
   <span style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:20px;
-               padding:3px 11px;font-size:0.73rem;font-weight:700;color:#065f46;
+               padding:4px 13px;font-size:0.84rem;font-weight:700;color:#065f46;
                white-space:nowrap;">③ 收盤價 &gt; 20日均線且均線上升</span>
-  <span style="font-size:0.63rem;color:#94a3b8;margin-left:6px;white-space:nowrap;">
+  <span style="font-size:0.75rem;color:#94a3b8;margin-left:6px;white-space:nowrap;">
     三項全達成 ✅✅✅ · 二項 ✅✅ · 一項 ✅（美股②不適用）
   </span>
 </div>""", unsafe_allow_html=True)
