@@ -476,10 +476,12 @@ def load_watchlists():
         tw = [s.strip().upper() for s in tw_raw.split(",") if s.strip()] if tw_raw else list(DEFAULT_TW)
         us = [s.strip().upper() for s in us_raw.split(",") if s.strip()] if us_raw else list(DEFAULT_US)
 
-    if key:
+    has_url_stocks = bool(tw_raw) and bool(us_raw)
+    if key and not has_url_stocks:
+        # URL 沒有明確清單時才從 profile 讀取
         tw_p, us_p, _ = load_profile(key)
         if tw_p is not None:
-            tw, us = tw_p, us_p   # profile 覆蓋 URL params
+            tw, us = tw_p, us_p
 
     return tw, us, key
 
@@ -1417,9 +1419,15 @@ def main():
         st.session_state.tw_list    = tw
         st.session_state.us_list    = us
         st.session_state.profile_key = key
-        # 若 key 存在但 profile 檔尚未建立，以目前 URL 清單建立 profile
-        if key and load_profile(key)[0] is None:
-            save_profile(key, tw, us)
+        if key:
+            _tw_raw = st.query_params.get("tw", "")
+            _us_raw = st.query_params.get("us", "")
+            if _tw_raw and _us_raw:
+                # URL 帶了明確清單 → 強制更新 profile（覆蓋舊的）
+                save_profile(key, tw, us)
+            elif load_profile(key)[0] is None:
+                # 新 profile → 以目前清單建立
+                save_profile(key, tw, us)
 
     tw_list = st.session_state.tw_list
     us_list = st.session_state.us_list
