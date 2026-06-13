@@ -478,57 +478,95 @@ def _fetch_one(symbol: str) -> dict:
     import re
     is_tw  = bool(re.match(r"^\d{4,6}$", symbol))
 
-    # ── Step 1: 價格 + 52週高低（自動嘗試 .TW → .TWO）──────────────
-    # 台灣股票分兩市：上市(.TW) / 上櫃(.TWO)，先試 .TW，失敗改 .TWO
-    price = prev = chg = pct = low52 = high52 = pos = None
+    # ── Step 1: 股價（三重來源）────────────────────────────────────────
+    # 來源優先序（台股）：
+    #   ① Yahoo Finance fast_info（chart API，最快）
+    #   ② TWSE/TPEx 官方 mis API（mis.twse.com.tw，完全獨立）
+    #   ③ Yahoo Finance yf.download（備援，不同 code path）
+    # 來源優先序（美股）：① Yahoo fast_info  ② Yahoo download
+    price = prev = chg = pct = None
     yf_sym = symbol + ".TW" if is_tw else symbol   # 預設
 
     def _try_price(sym: str):
-        nonlocal price, prev, chg, pct, low52, high52, pos
+        """來源①③：Yahoo Finance fast_info / download"""
+        nonlocal price, prev, chg, pct
         try:
             fi = yf.Ticker(sym, session=_http_session()).fast_info
-            price  = _safe_float(fi.last_price)
-            if not price:
+            p  = _safe_float(fi.last_price)
+            if not p:
                 return False
-            prev   = _safe_float(fi.previous_close) or price
-            chg    = (price - prev) if price and prev else None
-            pct    = chg / prev * 100 if chg and prev else None
-            low52  = _safe_float(getattr(fi, "year_low",  None))
-            high52 = _safe_float(getattr(fi, "year_high", None))
-            if price and low52 and high52 and high52 > low52:
-                pos = (price - low52) / (high52 - low52) * 100
+            pv     = _safe_float(fi.previous_close) or p
+            price  = p; prev = pv
+            chg    = price - prev
+            pct    = chg / prev * 100 if prev else None
             return True
         except Exception:
             return False
 
     def _try_price_dl(sym: str):
-        """備援：yf.download()，同時取 52 週高低"""
-        nonlocal price, prev, chg, pct, low52, high52, pos
+        """來源③：Yahoo Finance yf.download（備援）"""
+        nonlocal price, prev, chg, pct
         try:
-            hist = yf.download(sym, period="1y", progress=False,
+            hist = yf.download(sym, period="5d", progress=False,
                                auto_adjust=True, multi_level_index=False)
-            if hist.empty:
+            if hist.empty or len(hist) < 1:
                 return False
-            price  = _safe_float(hist["Close"].iloc[-1])
-            if not price:
+            p = _safe_float(hist["Close"].iloc[-1])
+            if not p:
                 return False
-            prev   = _safe_float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
-            chg    = (price - prev) if price and prev else None
-            pct    = chg / prev * 100 if chg and prev else None
-            low52  = _safe_float(hist["Low"].min())
-            high52 = _safe_float(hist["High"].max())
-            if price and low52 and high52 and high52 > low52:
-                pos = (price - low52) / (high52 - low52) * 100
+            pv     = _safe_float(hist["Close"].iloc[-2]) if len(hist) > 1 else p
+            price  = p; prev = pv
+            chg    = price - prev
+            pct    = chg / prev * 100 if prev else None
             return True
         except Exception:
             return False
 
+    def _try_price_twse(sym_code: str):
+        """來源②：TWSE/TPEx 官方即時 API（mis.twse.com.tw）
+        自動嘗試 tse（上市）與 otc（上櫃）；回傳 'tse'/'otc' 或 None。
+        注意：休市時 z='-'，此時資料無效。
+        """
+        nonlocal price, prev, chg, pct
+        try:
+            for ex in ("tse", "otc"):
+                r = requests.get(
+                    "https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
+                    params={"ex_ch": f"{ex}_{sym_code}.tw", "json": "1", "delay": "0"},
+                    timeout=6,
+                    headers={"Referer": "https://mis.twse.com.tw/",
+                             "User-Agent": "Mozilla/5.0"},
+                )
+                arr = r.json().get("msgArray", [])
+                if not arr:
+                    continue
+                item = arr[0]
+                z = item.get("z", "-")
+                if z in ("-", "", None):
+                    return None    # 休市；無即時報價
+                p = _safe_float(z)
+                if not p:
+                    continue
+                y      = _safe_float(item.get("y"))
+                price  = p; prev = y or p
+                chg    = price - prev
+                pct    = chg / prev * 100 if prev else None
+                return ex          # 'tse'=上市(.TW)  'otc'=上櫃(.TWO)
+        except Exception:
+            pass
+        return None
+
     if is_tw:
-        # 嘗試順序：.TW fast_info → .TW download → .TWO fast_info → .TWO download
         if not _try_price(symbol + ".TW"):
-            if not _try_price_dl(symbol + ".TW"):
-                if _try_price(symbol + ".TWO") or _try_price_dl(symbol + ".TWO"):
-                    yf_sym = symbol + ".TWO"   # 上櫃股票，後續 info 也用此 symbol
+            twse_ex = _try_price_twse(symbol)
+            if twse_ex is None and not price:
+                if not _try_price_dl(symbol + ".TW"):
+                    if _try_price(symbol + ".TWO"):
+                        yf_sym = symbol + ".TWO"
+                    elif _try_price_dl(symbol + ".TWO"):
+                        yf_sym = symbol + ".TWO"
+            elif twse_ex == "otc":
+                yf_sym = symbol + ".TWO"
     else:
         if not _try_price(symbol):
             _try_price_dl(symbol)
@@ -563,9 +601,22 @@ def _fetch_one(symbol: str) -> dict:
 
     pe_label, pe_cls, pe_ind, pe_lo, pe_hi = pe_assessment(pe, symbol, sector)
 
-    # ── Step 4: 選股信號（技術指標，獨立快取 5 min）────────────────────
+    # ── Step 4: 選股信號＋52週高低點（技術指標，獨立快取 5 min）──────
     is_tpex = yf_sym.endswith(".TWO")
     tech = fetch_technical(yf_sym, symbol, is_tw, is_tpex)
+
+    # 52週高低點：優先用 fetch_technical 自行計算（252 天 OHLC，不依賴 Yahoo 預計算值）
+    # 若 fetch_technical 無資料（如新股），才回退到 fast_info year_high/year_low
+    low52  = tech.get("low52")  or getattr(yf.Ticker(yf_sym, session=_http_session()).fast_info, "year_low",  None)
+    high52 = tech.get("high52") or getattr(yf.Ticker(yf_sym, session=_http_session()).fast_info, "year_high", None)
+    low52  = _safe_float(low52)
+    high52 = _safe_float(high52)
+    pos    = (price - low52) / (high52 - low52) * 100 if (price and low52 and high52 and high52 > low52) else None
+
+    # PE：若 fund 未取得，用 FinMind TTM EPS × 目前股價自行計算（獨立來源）
+    if pe is None and fund.get("ttm_eps") and price:
+        pe = round(price / fund["ttm_eps"], 1)
+        pe_label, pe_cls, pe_ind, pe_lo, pe_hi = pe_assessment(pe, symbol, sector)
 
     return {
         "ok": True, "symbol": symbol, "name": name, "is_tw": is_tw,
@@ -599,8 +650,10 @@ def fetch_fundamentals(yf_sym: str, symbol: str) -> dict:
     修法：
     A) ticker.info — 主要方法，嚴格驗證是否包含財務欄位
     B) analyst_price_targets — 備援目標價（yfinance 0.2.37+，不同 endpoint）
-    C) income_stmt + market_cap — 備援 PE（timeseries API，較少被封鎖）
-    D) upgrades_downgrades — 評估日
+    C) income_stmt + market_cap — 計算 PE（自行算，timeseries API 較少被封鎖）
+    D) upgrades_downgrades — 評估日 + 歷史追蹤家數
+    E) recommendations_summary — 近期追蹤家數
+    F) FinMind 季報 EPS — 台股 PE 獨立第三來源（與 Yahoo 完全獨立）
     """
     result = {
         "pe": None, "sector": "", "industry": "",
@@ -608,7 +661,35 @@ def fetch_fundamentals(yf_sym: str, symbol: str) -> dict:
         "n_ana": None, "n_ana_recent": None, "n_ana_total": None,
         "shortName": "", "longName": "",
         "ana_date": None, "ana_date_src": None,
+        "ttm_eps": None,   # FinMind TTM EPS，供 _fetch_one 計算 PE 用
     }
+
+    # ── F: FinMind 季報 EPS（台股獨立 PE 來源，優先嘗試）────────────
+    # 與 Yahoo Finance 完全獨立；PE = 目前股價 / TTM EPS（最近 4 季合計）
+    is_tw_sym = yf_sym.endswith((".TW", ".TWO"))
+    if is_tw_sym:
+        try:
+            tw_code  = symbol   # symbol 是純數字代號
+            start_dt = (now_tw() - timedelta(days=420)).strftime("%Y-%m-%d")
+            r = requests.get(
+                "https://api.finmindtrade.com/api/v4/data",
+                params={"dataset": "TaiwanStockFinancialStatements",
+                        "data_id": tw_code, "start_date": start_dt},
+                timeout=10,
+            )
+            data = r.json()
+            if data.get("status") == 200:
+                # 尋找 EPS 相關欄位（FinMind 欄位名稱可能為 EPS 或 BasicEPS）
+                eps_rows = [
+                    row for row in data.get("data", [])
+                    if row.get("type") in ("EPS", "BasicEPS", "每股盈餘")
+                ]
+                if len(eps_rows) >= 4:
+                    ttm = sum(_safe_float(r.get("value", 0)) or 0 for r in eps_rows[-4:])
+                    if ttm > 0:
+                        result["ttm_eps"] = ttm
+        except Exception:
+            pass
 
     # ── A: ticker.info（主要方法；需 quoteSummary 全模組）────────────
     # 嚴格確認有真實財務資料，而不只是 quoteType 基本欄位（8 個 key）
@@ -710,39 +791,61 @@ def fetch_fundamentals(yf_sym: str, symbol: str) -> dict:
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_tw_margin_change(symbol: str, is_tpex: bool = False):
     """
-    查詢最近 5 個交易日融資餘額（MarginPurchaseTodayBalance）是否淨增加。
-    使用 FinMind 開放 API（免費、上市+上櫃皆支援）。
-    回傳 True=增加 / False=減少或持平 / None=無資料或錯誤
+    查詢最近 5 個交易日融資餘額是否淨增加。雙來源：
+    來源①：FinMind（TaiwanStockMarginPurchaseShortSale）
+    來源②：TWSE/TPEx 官方 API（MI_MARGN，備援）
+    回傳 True=增加 / False=減少或持平 / None=無資料
     """
+    # ── 來源①：FinMind ──────────────────────────────────────────────
     try:
         start_date = (now_tw() - timedelta(days=14)).strftime("%Y-%m-%d")
-        url = "https://api.finmindtrade.com/api/v4/data"
-        params = {
-            "dataset":   "TaiwanStockMarginPurchaseShortSale",
-            "data_id":   symbol,
-            "start_date": start_date,
-        }
-        r = requests.get(url, params=params, timeout=8)
+        r = requests.get(
+            "https://api.finmindtrade.com/api/v4/data",
+            params={"dataset": "TaiwanStockMarginPurchaseShortSale",
+                    "data_id": symbol, "start_date": start_date},
+            timeout=8,
+        )
         data = r.json()
-
-        if data.get("status") != 200:
-            return None
-
-        rows = data.get("data", [])
-        if not rows or len(rows) < 2:
-            return None
-
-        # 取最近 5 個交易日
-        recent = rows[-5:] if len(rows) >= 5 else rows
-        if len(recent) < 2:
-            return None
-
-        first_bal = int(recent[0].get("MarginPurchaseTodayBalance", 0))
-        last_bal  = int(recent[-1].get("MarginPurchaseTodayBalance", 0))
-        return last_bal > first_bal   # True = 融資餘額增加
-
+        if data.get("status") == 200:
+            rows = data.get("data", [])
+            if rows and len(rows) >= 2:
+                recent    = rows[-5:] if len(rows) >= 5 else rows
+                first_bal = int(recent[0].get("MarginPurchaseTodayBalance", 0))
+                last_bal  = int(recent[-1].get("MarginPurchaseTodayBalance", 0))
+                return last_bal > first_bal
     except Exception:
-        return None
+        pass
+
+    # ── 來源②：TWSE/TPEx 官方 API（備援）───────────────────────────
+    try:
+        today    = now_tw()
+        date_str = today.strftime("%Y%m%d")
+        if is_tpex:
+            url = (f"https://www.tpex.org.tw/web/stock/margin_trading/"
+                   f"margin_balance/margin_bal_result.php?"
+                   f"l=zh-tw&d={today.strftime('%Y/%m/%d')}&s=0,asc&o=json")
+        else:
+            url = (f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?"
+                   f"response=json&date={date_str}&selectType=STOCK")
+        r2 = requests.get(url, timeout=8,
+                          headers={"Referer": "https://www.twse.com.tw/"})
+        raw = r2.json()
+        # TWSE 格式：tables[0].data = [[代號, 名稱, ..., 融資今日餘額, ...], ...]
+        tables = raw.get("tables", raw.get("data", []))
+        if tables:
+            rows2 = (tables[0].get("data", []) if isinstance(tables[0], dict)
+                     else tables)
+            for row in rows2:
+                if isinstance(row, list) and len(row) > 6 and str(row[0]) == symbol:
+                    # 欄位順序依 TWSE 回傳，融資今日餘額通常在 index 6
+                    bal_today = _safe_float(str(row[6]).replace(",", ""))
+                    bal_prev  = _safe_float(str(row[5]).replace(",", "")) if len(row) > 5 else None
+                    if bal_today is not None and bal_prev is not None:
+                        return bal_today > bal_prev
+    except Exception:
+        pass
+
+    return None
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -759,16 +862,24 @@ def fetch_technical(yf_sym: str, symbol: str, is_tw: bool, is_tpex: bool) -> dic
         "margin_ok": None,    # True / False / None(N/A)
         "ma20_ok":   False,
         "score":     0,
+        "low52":     None,    # 自行計算，不依賴 ticker.info 預計算值
+        "high52":    None,
     }
 
-    # ── ①③：下載60日歷史計算技術指標 ──────────────────────────────
+    # ── ①③：下載252日歷史（一年）自行計算技術指標＋52週高低點 ────
+    # 52週高低：從 OHLC 直接計算（公式法，非 Yahoo 預計算）
+    # K值/MA：使用全部資料（更多歷史→KD 收斂更準確）
     try:
         hist = yf.download(
-            yf_sym, period="60d", progress=False,
+            yf_sym, period="252d", progress=False,
             auto_adjust=True, multi_level_index=False,
         )
         if hist.empty or len(hist) < 20:
             return result
+
+        # 52週高低點（自行計算）
+        result["low52"]  = float(hist["Low"].min())
+        result["high52"] = float(hist["High"].max())
 
         close = hist["Close"].dropna()
         high  = hist["High"].dropna()
