@@ -364,16 +364,66 @@ def is_tw_stock(code: str) -> bool:
     return bool(_re.match(r"^\d{4,6}$", code))
 
 # ════════════════════════════════════════════════════════════════
-# ── 跨裝置同步：Server-side profile（/tmp 共享）─────────────────────
+# ── 跨裝置同步：GitHub Gist（永久）+ /tmp 備援 ───────────────────
 # ════════════════════════════════════════════════════════════════
-_PROFILE_DIR = Path("/tmp/stock_profiles")
+_PROFILE_DIR   = Path("/tmp/stock_profiles")
+_GIST_FILENAME = "stock-dashboard-profiles.json"
+_GIST_ID_CACHE = Path("/tmp/stock_gist_id.txt")
+
+def _gh_headers():
+    token = st.secrets.get("GITHUB_TOKEN", "")
+    if not token:
+        return None
+    return {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
 
 def _profile_path(key: str) -> Path:
     safe = hashlib.sha256(key.encode()).hexdigest()[:20]
     return _PROFILE_DIR / f"{safe}.json"
 
+def _get_gist_id() -> str | None:
+    """找到或建立 profiles Gist，回傳 Gist ID。以 /tmp 快取避免重複查詢。"""
+    if _GIST_ID_CACHE.exists():
+        return _GIST_ID_CACHE.read_text().strip()
+    hdrs = _gh_headers()
+    if not hdrs:
+        return None
+    try:
+        r = requests.get("https://api.github.com/gists", headers=hdrs, timeout=10)
+        if r.ok:
+            for gist in r.json():
+                if _GIST_FILENAME in gist.get("files", {}):
+                    gid = gist["id"]
+                    _GIST_ID_CACHE.write_text(gid)
+                    return gid
+        r2 = requests.post("https://api.github.com/gists", headers=hdrs, timeout=10, json={
+            "description": "Stock Dashboard Profiles",
+            "public": False,
+            "files": {_GIST_FILENAME: {"content": "{}"}}
+        })
+        if r2.ok:
+            gid = r2.json()["id"]
+            _GIST_ID_CACHE.write_text(gid)
+            return gid
+    except Exception:
+        pass
+    return None
+
 def load_profile(key: str):
-    """讀取 profile 檔案。回傳 (tw, us, timestamp_str) 或 (None, None, None)。"""
+    """讀取 profile。優先從 GitHub Gist，備援用 /tmp。"""
+    gid = _get_gist_id()
+    if gid:
+        try:
+            hdrs = _gh_headers()
+            r = requests.get(f"https://api.github.com/gists/{gid}", headers=hdrs, timeout=10)
+            if r.ok:
+                content = r.json()["files"][_GIST_FILENAME]["content"]
+                profiles = json.loads(content)
+                d = profiles.get(key, {})
+                if d:
+                    return d.get("tw", []), d.get("us", []), d.get("ts", "")
+        except Exception:
+            pass
+    # 備援：/tmp
     try:
         _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         p = _profile_path(key)
@@ -385,14 +435,26 @@ def load_profile(key: str):
     return None, None, None
 
 def save_profile(key: str, tw: list, us: list):
-    """寫入 profile 檔案，同時附上更新時間。"""
+    """寫入 profile。優先存 GitHub Gist，同時也存 /tmp。"""
+    ts   = now_tw().strftime("%m/%d %H:%M")
+    data = {"tw": tw, "us": us, "ts": ts}
+    gid  = _get_gist_id()
+    if gid:
+        try:
+            hdrs = _gh_headers()
+            r = requests.get(f"https://api.github.com/gists/{gid}", headers=hdrs, timeout=10)
+            profiles = json.loads(r.json()["files"][_GIST_FILENAME]["content"]) if r.ok else {}
+            profiles[key] = data
+            requests.patch(f"https://api.github.com/gists/{gid}", headers=hdrs, timeout=10, json={
+                "files": {_GIST_FILENAME: {"content": json.dumps(profiles, ensure_ascii=False)}}
+            })
+        except Exception:
+            pass
+    # 也存 /tmp
     try:
         _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         _profile_path(key).write_text(
-            json.dumps({"tw": tw, "us": us,
-                        "ts": now_tw().strftime("%m/%d %H:%M")},
-                       ensure_ascii=False),
-            encoding="utf-8"
+            json.dumps(data, ensure_ascii=False), encoding="utf-8"
         )
     except Exception:
         pass
