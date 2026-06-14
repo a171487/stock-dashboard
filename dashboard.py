@@ -37,6 +37,14 @@ st.markdown("""<style>
 .stApp {
     background: linear-gradient(160deg, #eef2ff 0%, #f0f9ff 55%, #f0fdf4 100%) !important;
 }
+[data-testid="stHorizontalBlock"] {
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+}
+[data-testid="stHorizontalBlock"] > [data-testid="column"] {
+    min-width: 0 !important;
+    overflow: hidden !important;
+}
 section[data-testid="stSidebar"] > div:first-child {
     background: linear-gradient(180deg, #1e3a5f 0%, #0f2240 100%) !important;
 }
@@ -1411,20 +1419,20 @@ def _sidebar_list(wl: list[str], key_prefix: str, save_fn, name_map: dict):
             wl.pop(i); save_fn(wl); st.rerun()
 
 def _compact_edit_list(wl: list[str], key_prefix: str, save_fn, name_map: dict):
-    """緊湊版清單（用於主畫面 tab）：代號＋中文，↑↓✕ 小按鈕。"""
+    """緊湊版清單（用於主畫面 tab）：代號＋中文，上下刪 小按鈕同行。"""
     n = len(wl)
     for i, sym in enumerate(list(wl)):
-        cn, cup, cdn, cdel = st.columns([4, 0.55, 0.55, 0.55])
+        cn, cup, cdn, cdel = st.columns([4, 0.6, 0.6, 0.7])
         name = name_map.get(sym, "")
         cn.markdown(
             f"<span style='font-weight:700;color:#dbeafe'>{sym}</span>"
             f"<span style='color:#94a3b8;font-size:0.8rem;margin-left:5px'>{name}</span>",
             unsafe_allow_html=True)
-        if cup.button("↑", key=f"{key_prefix}up_{sym}", disabled=(i == 0), use_container_width=True):
+        if cup.button("上", key=f"{key_prefix}up_{sym}", disabled=(i == 0), use_container_width=True):
             wl[i], wl[i-1] = wl[i-1], wl[i]; save_fn(wl); st.rerun()
-        if cdn.button("↓", key=f"{key_prefix}dn_{sym}", disabled=(i == n-1), use_container_width=True):
+        if cdn.button("下", key=f"{key_prefix}dn_{sym}", disabled=(i == n-1), use_container_width=True):
             wl[i], wl[i+1] = wl[i+1], wl[i]; save_fn(wl); st.rerun()
-        if cdel.button("✕", key=f"{key_prefix}rm_{sym}", use_container_width=True):
+        if cdel.button("刪", key=f"{key_prefix}rm_{sym}", use_container_width=True):
             wl.pop(i); save_fn(wl); st.rerun()
 
 
