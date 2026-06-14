@@ -1,0 +1,62 @@
+name: Auto Checklist
+
+on:
+  schedule:
+    # 台股每日：週一~五 14:00 台灣時間 = UTC 06:00
+    - cron: '0 6 * * 1-5'
+    # 美股每日：週一~五 07:00 台灣時間 = UTC 23:00（前一天）
+    - cron: '0 23 * * 0-4'
+    # 每週全市場：週六 09:00 台灣時間 = UTC 01:00
+    - cron: '0 1 * * 6'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'daily or weekly'
+        required: true
+        default: 'daily'
+      market:
+        description: 'tw, us, or all'
+        required: true
+        default: 'all'
+
+jobs:
+  run-checklist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install yfinance requests pandas
+
+      - name: Determine mode and market
+        run: |
+          SCHEDULE="${{ github.event.schedule }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "MODE=${{ github.event.inputs.mode }}"   >> $GITHUB_ENV
+            echo "MARKET=${{ github.event.inputs.market }}" >> $GITHUB_ENV
+          elif [ "$SCHEDULE" = "0 6 * * 1-5" ]; then
+            echo "MODE=daily"  >> $GITHUB_ENV
+            echo "MARKET=tw"   >> $GITHUB_ENV
+          elif [ "$SCHEDULE" = "0 23 * * 0-4" ]; then
+            echo "MODE=daily"  >> $GITHUB_ENV
+            echo "MARKET=us"   >> $GITHUB_ENV
+          elif [ "$SCHEDULE" = "0 1 * * 6" ]; then
+            echo "MODE=weekly" >> $GITHUB_ENV
+            echo "MARKET=all"  >> $GITHUB_ENV
+          fi
+
+      - name: Run checklist
+        env:
+          GIST_TOKEN:  ${{ secrets.GIST_TOKEN }}
+          PROFILE_KEY: ${{ secrets.PROFILE_KEY }}
+        run: |
+          echo "▶ mode=$MODE  market=$MARKET"
+          python run_checklist.py --mode $MODE --market $MARKET
