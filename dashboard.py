@@ -1553,13 +1553,12 @@ def main():
     </div>""", unsafe_allow_html=True)
 
     # ══ 全球指標 ══════════════════════════════════════════════════
-    st.markdown('<div class="section-hdr">🌐 全球經濟指標</div>',
-                unsafe_allow_html=True)
-    with st.spinner("載入全球指標…"):
-        global_data = fetch_global()
-    render_global(global_data)
+    with st.expander("🌐 全球經濟指標", expanded=False):
+        with st.spinner("載入全球指標…"):
+            global_data = fetch_global()
+        render_global(global_data)
 
-    st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
     # ══ 手機版：新增股票快捷區（桌機可用側欄；手機側欄預設收起）══
     with st.expander("📱 新增 / 管理股票（手機版）", expanded=False):
@@ -1706,21 +1705,25 @@ def main():
         st.info("觀察名單是空的，請點上方「📱 新增 / 管理股票」或展開左側側欄新增代碼。")
         return
 
-    # ── 🇹🇼 台股（可折疊）──
-    if tw_list:
-        with st.expander(f"🇹🇼 台股觀察名單（{len(tw_list)} 支）",
-                         expanded=True):
+    # ── 台股 / 美股 tabs ──
+    tab_tw, tab_us = st.tabs([
+        f"🇹🇼 台股（{len(tw_list)} 支）",
+        f"🇺🇸 美股（{len(us_list)} 支）"
+    ])
+    with tab_tw:
+        if tw_list:
             with st.spinner("載入台股資料…"):
                 tw_stocks = fetch_stocks_batch(tuple(tw_list))
             render_watchlist(tw_stocks)
-
-    # ── 🇺🇸 美股（可折疊）──
-    if us_list:
-        with st.expander(f"🇺🇸 美股觀察名單（{len(us_list)} 支）",
-                         expanded=True):
+        else:
+            st.info("台股清單是空的，請在「✏️ 編輯清單」新增。")
+    with tab_us:
+        if us_list:
             with st.spinner("載入美股資料…"):
                 us_stocks = fetch_stocks_batch(tuple(us_list))
             render_watchlist(us_stocks)
+        else:
+            st.info("美股清單是空的，請在「✏️ 編輯清單」新增。")
 
     # ── 說明欄 ──
     with st.expander("📖 欄位說明 & 資料來源"):
