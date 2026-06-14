@@ -1642,6 +1642,36 @@ def main():
             _, _, ts = load_profile(cur_key)
             st.caption(f"上次同步：{ts}　｜　將含有 ?key={cur_key} 的網址加入書籤，下次自動載入")
 
+    # ══ 編輯清單（手機可用）══════════════════════════════════════════
+    with st.expander("✏️ 編輯清單（新增 / 刪除 / 排序）", expanded=False):
+        # 新增股票
+        st.markdown("**新增個股**")
+        ea1, ea2, ea3 = st.columns([3, 1, 1])
+        add_code = ea1.text_input(
+            "股票代號", placeholder="台股：2330　美股：NVDA",
+            label_visibility="collapsed", key="main_edit_add_input"
+        )
+        if ea2.button("＋台股", key="main_edit_add_tw", use_container_width=True):
+            code = add_code.strip().upper()
+            if code and code not in tw_list:
+                tw_list.append(code); save_tw(tw_list); st.rerun()
+        if ea3.button("＋美股", key="main_edit_add_us", use_container_width=True):
+            code = add_code.strip().upper()
+            if code and code not in us_list:
+                us_list.append(code); save_us(us_list); st.rerun()
+
+        st.markdown("---")
+
+        # 台股排序 / 刪除
+        if tw_list:
+            st.markdown("**🇹🇼 台股（↑↓ 排序　✕ 刪除）**")
+            _sidebar_list(tw_list, "me_tw_", save_tw, TW_NAMES)
+
+        # 美股排序 / 刪除
+        if us_list:
+            st.markdown("**🇺🇸 美股（↑↓ 排序　✕ 刪除）**")
+            _sidebar_list(us_list, "me_us_", save_us, {})
+
     # ══ 觀察名單 ══════════════════════════════════════════════════
     st.markdown('<div class="section-hdr">👁 我的觀察名單</div>',
                 unsafe_allow_html=True)
