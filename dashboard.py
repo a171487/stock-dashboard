@@ -1441,6 +1441,588 @@ def _compact_edit_list(wl: list[str], key_prefix: str, save_fn, name_map: dict):
 
 
 # ════════════════════════════════════════════════════════════════
+# ── 檢查表：資料抓取與計算 ──────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _fetch_ohlcv_for_checklist(yf_sym: str) -> dict:
+    try:
+        hist = yf.download(yf_sym, period="90d", progress=False,
+                           auto_adjust=True, multi_level_index=False)
+        if hist.empty or len(hist) < 20:
+            return {}
+        return {
+            "close":  hist["Close"].tolist(),
+            "open":   hist["Open"].tolist(),
+            "high":   hist["High"].tolist(),
+            "low":    hist["Low"].tolist(),
+            "volume": hist["Volume"].tolist(),
+        }
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _fetch_institutional_for_checklist(symbol: str) -> list:
+    try:
+        start_date = (now_tw() - timedelta(days=40)).strftime("%Y-%m-%d")
+        r = requests.get(
+            "https://api.finmindtrade.com/api/v4/data",
+            params={"dataset": "TaiwanStockInstitutionalInvestorsBuySell",
+                    "data_id": symbol, "start_date": start_date},
+            timeout=10,
+        )
+        data = r.json()
+        if data.get("status") == 200:
+            return data.get("data", [])
+    except Exception:
+        pass
+    return []
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _fetch_margin_for_checklist(symbol: str) -> list:
+    try:
+        start_date = (now_tw() - timedelta(days=40)).strftime("%Y-%m-%d")
+        r = requests.get(
+            "https://api.finmindtrade.com/api/v4/data",
+            params={"dataset": "TaiwanStockMarginPurchaseShortSale",
+                    "data_id": symbol, "start_date": start_date},
+            timeout=10,
+        )
+        data = r.json()
+        if data.get("status") == 200:
+            return data.get("data", [])
+    except Exception:
+        pass
+    return []
+
+
+def _parse_institutional(rows: list) -> list:
+    """整理三大法人原始資料成按日期排列的 list"""
+    from collections import defaultdict
+    by_date: dict = defaultdict(lambda: {"foreign": 0, "sitc": 0, "dealer": 0})
+    for row in rows:
+        d    = row.get("date", "")
+        name = row.get("name", "")
+        net  = int(row.get("buy", 0)) - int(row.get("sell", 0))
+        if "外資" in name:
+            by_date[d]["foreign"] = net
+        elif "投信" in name:
+            by_date[d]["sitc"] = net
+        elif "自營" in name:
+            by_date[d]["dealer"] = net
+    result = []
+    for date in sorted(by_date.keys()):
+        v = by_date[date]
+        result.append({
+            "date": date,
+            "foreign": v["foreign"], "sitc": v["sitc"], "dealer": v["dealer"],
+            "total": v["foreign"] + v["sitc"] + v["dealer"],
+        })
+    return result
+
+
+def calc_daily_checklist(symbol: str, is_tw: bool) -> dict:
+    """計算 12 題每日檢查表"""
+    yf_sym  = symbol + ".TW" if is_tw else symbol
+    ohlcv   = _fetch_ohlcv_for_checklist(yf_sym)
+    scores  = [0] * 12
+    details = [""] * 12
+
+    if not ohlcv or len(ohlcv.get("close", [])) < 20:
+        return {"scores": scores, "total": 0, "conclusion": "無資料", "details": details}
+
+    close  = ohlcv["close"];  open_ = ohlcv["open"]
+    high   = ohlcv["high"];   low   = ohlcv["low"]
+    volume = ohlcv["volume"]
+
+    # ── A. 趨勢狀態 ─────────────────────────────────────────────────
+    ma20 = sum(close[-20:]) / 20
+    scores[0] = int(close[-1] > ma20)
+    details[0] = f"收{close[-1]:.1f} MA20={ma20:.1f}"
+
+    support = min(low[-15:-1]) if len(low) > 15 else min(low[:-1])
+    scores[1] = int(close[-1] > support * 0.97)
+    details[1] = f"支撐{support:.1f}"
+
+    if len(high) >= 10:
+        r_hi = (high[-1] + high[-2]) / 2; p_hi = (high[-5] + high[-6]) / 2
+        r_lo = (low[-1]  + low[-2])  / 2; p_lo = (low[-5]  + low[-6])  / 2
+        scores[2] = int(r_hi > p_hi and r_lo > p_lo)
+    details[2] = "高低墊高" if scores[2] else "未墊高"
+
+    # ── B. 籌碼狀態 ─────────────────────────────────────────────────
+    if is_tw:
+        inst_data   = _parse_institutional(_fetch_institutional_for_checklist(symbol))
+        margin_rows = _fetch_margin_for_checklist(symbol)
+    else:
+        inst_data = []; margin_rows = []
+
+    if inst_data:
+        lt = inst_data[-1]["total"]
+        scores[3] = int(lt > 0)
+        details[3] = f"法人合計{lt:+,}"
+    elif len(close) >= 5 and len(volume) >= 10:
+        vol_avg = sum(volume[-10:-5]) / 5
+        scores[3] = int(close[-1] > close[-5] and volume[-1] > vol_avg)
+        details[3] = "量增價升" if scores[3] else "量價偏弱"
+    else:
+        details[3] = "無資料"
+
+    if is_tw and margin_rows:
+        bals = [int(r.get("MarginPurchaseTodayBalance", 0)) for r in margin_rows[-5:]]
+        b2 = bals[-1] > bals[0] if len(bals) >= 2 else False
+        scores[4] = int(b2)
+        details[4] = f"融資{'增' if b2 else '減'}"
+    elif not is_tw and len(close) >= 3 and len(volume) >= 6:
+        vol_avg = sum(volume[-6:-3]) / 3
+        b2 = not (close[-1] < close[-2] and volume[-1] > vol_avg * 1.5)
+        scores[4] = int(b2)
+        details[4] = "量縮整理" if b2 else "量增下跌"
+    else:
+        details[4] = "無資料"
+
+    if is_tw and len(inst_data) >= 2:
+        consec_neg = inst_data[-1]["total"] < 0 and inst_data[-2]["total"] < 0
+        scores[5] = int(not consec_neg)
+        details[5] = "連2日賣超" if consec_neg else "無連續惡化"
+    elif not is_tw and len(close) >= 3 and len(volume) >= 6:
+        vol_avg  = sum(volume[-6:-3]) / 3
+        both_dn  = close[-1] < close[-2] < close[-3]
+        vol_up   = volume[-1] > vol_avg and volume[-2] > vol_avg
+        scores[5] = int(not (both_dn and vol_up))
+        details[5] = "連跌量增" if (both_dn and vol_up) else "無惡化"
+    else:
+        scores[5] = 1
+        details[5] = "無資料"
+
+    # ── C. 關鍵法人 ─────────────────────────────────────────────────
+    if inst_data:
+        scores[6] = int(inst_data[-1]["foreign"] > 0)
+        details[6] = f"外資{inst_data[-1]['foreign']:+,}"
+    elif len(close) >= 10:
+        ma5  = sum(close[-5:]) / 5
+        ma10 = sum(close[-10:]) / 10
+        scores[6] = int(ma5 > ma10)
+        details[6] = "短均>中均" if scores[6] else "短均<中均"
+    else:
+        details[6] = "無資料"
+
+    if len(inst_data) >= 3:
+        nets    = [d["total"] for d in inst_data[-5:]]
+        avg_abs = sum(abs(x) for x in nets[:-1]) / max(len(nets) - 1, 1)
+        big_sell = nets[-1] < 0 and abs(nets[-1]) > max(avg_abs * 1.5, 1000)
+        scores[7] = int(not big_sell)
+        details[7] = f"大賣超{nets[-1]:,}" if big_sell else "無異常賣超"
+    else:
+        scores[7] = 1
+        details[7] = "⚠️ 替代資料"
+
+    if len(inst_data) >= 2:
+        prev_net = inst_data[-2]["total"]; curr_net = inst_data[-1]["total"]
+        flip = prev_net > 0 and curr_net < -abs(prev_net) * 0.5
+        scores[8] = int(not flip)
+        details[8] = f"轉空({curr_net:,})" if flip else "方向穩定"
+    elif len(close) >= 9:
+        ma5n = sum(close[-5:]) / 5; ma5p = sum(close[-6:-1]) / 5
+        scores[8] = int(ma5n >= ma5p)
+        details[8] = "均線穩" if scores[8] else "均線轉弱"
+    else:
+        scores[8] = 1
+        details[8] = "無資料"
+
+    # ── D. 量價健康度 ────────────────────────────────────────────────
+    vol_ma5 = sum(volume[-6:-1]) / 5 if len(volume) >= 6 else sum(volume[-5:]) / 5
+    is_up   = close[-1] >= close[-2] if len(close) >= 2 else True
+    d1 = (volume[-1] >= vol_ma5 * 0.7) if is_up else (volume[-1] <= vol_ma5 * 1.5)
+    scores[9] = int(d1)
+    details[9] = f"量{'放大' if volume[-1] > vol_ma5 else '縮小'}({'漲' if is_up else '跌'})"
+
+    is_big_vol = volume[-1] > vol_ma5 * 2.0
+    if is_big_vol and open_[-1] > 0:
+        body  = (open_[-1] - close[-1]) / open_[-1]
+        stall = abs(close[-1] - open_[-1]) / open_[-1] < 0.005
+        d2 = not (body > 0.02 or stall)
+        details[10] = ("爆量長黑" if body > 0.02 else "爆量不漲") if not d2 else "量大尚可"
+    else:
+        d2 = True
+        details[10] = "量能正常"
+    scores[10] = int(d2)
+
+    is_pb = close[-1] < close[-2] if len(close) >= 2 else False
+    if is_pb:
+        d3 = volume[-1] < vol_ma5 * 0.9
+        details[11] = f"回檔量{'縮✓' if d3 else '未縮✗'}"
+    else:
+        d3 = True
+        details[11] = "未拉回"
+    scores[11] = int(d3)
+
+    total = sum(scores)
+    concl = "✅ 續抱" if total >= 9 else ("👀 觀察" if total >= 6 else "🔴 出場")
+    return {"scores": scores, "total": total, "conclusion": concl, "details": details}
+
+
+def calc_weekly_checklist(symbol: str, is_tw: bool) -> dict:
+    """計算 12 題每週檢查表（以日線資料近似週線）"""
+    yf_sym  = symbol + ".TW" if is_tw else symbol
+    ohlcv   = _fetch_ohlcv_for_checklist(yf_sym)
+    scores  = [0] * 12
+    details = [""] * 12
+
+    if not ohlcv or len(ohlcv.get("close", [])) < 20:
+        return {"scores": scores, "total": 0, "conclusion": "無資料", "details": details}
+
+    close  = ohlcv["close"];  high   = ohlcv["high"]
+    low    = ohlcv["low"];    volume = ohlcv["volume"]
+    n = len(close)
+
+    # 週線近似：最近5日=本週, 5-10日前=上週
+    wc0 = close[-1]
+    wc1 = close[-5]  if n >= 5  else close[0]
+    wc4 = close[-20] if n >= 20 else close[0]
+    wh0 = max(high[-5:])    if n >= 5  else high[-1]
+    wh4 = max(high[-20:])   if n >= 20 else wh0
+    wv0 = sum(volume[-5:])  if n >= 5  else volume[-1]
+    wv1 = sum(volume[-10:-5]) if n >= 10 else wv0
+    wv4_avg = sum(volume[-20:]) / 4 if n >= 20 else wv0
+
+    # ── A. 中期趨勢 ─────────────────────────────────────────────────
+    if n >= 25:
+        wma5 = (close[-1] + close[-5] + close[-10] + close[-15] + close[-20]) / 5
+        scores[0] = int(wc0 > wma5 and wc0 > wc4)
+        details[0] = f"週收{wc0:.1f} 5週均{wma5:.1f}"
+    else:
+        details[0] = "週資料不足"
+
+    if n >= 60:
+        ma20 = sum(close[-20:]) / 20; ma60 = sum(close[-60:]) / 60
+        scores[1] = int(ma20 > ma60)
+        details[1] = f"MA20={ma20:.1f} MA60={ma60:.1f}"
+    elif n >= 20:
+        ma20 = sum(close[-20:]) / 20; ma10 = sum(close[-10:]) / 10
+        scores[1] = int(ma20 > ma10)
+        details[1] = f"MA20={ma20:.1f}（替代MA60）"
+    else:
+        details[1] = "資料不足"
+
+    if n >= 20:
+        support = min(low[-20:-5]) if n > 25 else min(low[-20:])
+        scores[2] = int(close[-1] > support * 0.97)
+        details[2] = f"支撐{support:.1f}"
+    else:
+        details[2] = "資料不足"
+
+    # ── B. 中期籌碼 ─────────────────────────────────────────────────
+    if is_tw:
+        inst_data   = _parse_institutional(_fetch_institutional_for_checklist(symbol))
+        margin_rows = _fetch_margin_for_checklist(symbol)
+    else:
+        inst_data = []; margin_rows = []
+
+    if inst_data:
+        wk = inst_data[-5:] if len(inst_data) >= 5 else inst_data
+        wk_total = sum(d["total"] for d in wk)
+        scores[3] = int(wk_total > 0)
+        details[3] = f"近5日法人{wk_total:+,}"
+    elif n >= 10:
+        vol_avg = sum(volume[-10:-5]) / 5
+        scores[3] = int(close[-1] > close[-5] and volume[-1] > vol_avg)
+        details[3] = "量增價升" if scores[3] else "量價偏弱"
+    else:
+        details[3] = "無資料"
+
+    if is_tw and margin_rows:
+        bals = [int(r.get("MarginPurchaseTodayBalance", 0)) for r in margin_rows[-10:]]
+        if len(bals) >= 5:
+            scores[4] = int(bals[-1] > bals[-5])
+            details[4] = f"週融資{'增' if scores[4] else '減'}"
+        else:
+            details[4] = "無融資資料"
+    elif not is_tw and n >= 10:
+        up_days = sum(1 for i in range(-5, 0) if close[i] > close[i - 1])
+        scores[4] = int(up_days >= 3)
+        details[4] = f"近5日漲{up_days}天"
+    else:
+        details[4] = "無資料"
+
+    if inst_data and len(inst_data) >= 3:
+        consec = 0
+        for d in reversed(inst_data):
+            if d["total"] > 0:
+                consec += 1
+            else:
+                break
+        scores[5] = int(consec >= 2)
+        details[5] = f"連續買超{consec}日"
+    elif n >= 20:
+        ma5n = sum(close[-5:]) / 5; ma5p = sum(close[-10:-5]) / 5
+        scores[5] = int(ma5n > ma5p)
+        details[5] = "MA5上升" if scores[5] else "MA5下降"
+    else:
+        details[5] = "無資料"
+
+    # ── C. 關鍵券商延續性 ────────────────────────────────────────────
+    if inst_data and len(inst_data) >= 5:
+        recent = inst_data[-5:]
+        f_pos = sum(1 for d in recent if d["foreign"] > 0)
+        s_pos = sum(1 for d in recent if d["sitc"] > 0)
+        scores[6] = int(f_pos >= 3 or s_pos >= 3)
+        details[6] = f"外資買{f_pos}/5 投信買{s_pos}/5"
+    elif n >= 20:
+        ma5  = sum(close[-5:]) / 5
+        ma10 = sum(close[-10:]) / 10
+        ma20 = sum(close[-20:]) / 20
+        scores[6] = int(ma5 > ma10 > ma20)
+        details[6] = "均線多頭" if scores[6] else "均線非多頭"
+    else:
+        details[6] = "無資料"
+
+    if inst_data and len(inst_data) >= 10:
+        tw_s = sum(d["total"] for d in inst_data[-5:])
+        lw_s = sum(d["total"] for d in inst_data[-10:-5])
+        scores[7] = int(not (lw_s > 0 and tw_s < 0))
+        details[7] = f"上週{lw_s:+,} 本週{tw_s:+,}"
+    elif inst_data:
+        scores[7] = 1
+        details[7] = "資料不足略過"
+    elif n >= 5:
+        scores[7] = int(wc0 >= wc1)
+        details[7] = f"週收{'升' if scores[7] else '降'}"
+    else:
+        details[7] = "無資料"
+
+    if inst_data and len(inst_data) >= 3:
+        recent = inst_data[-3:]
+        s_pos = sum(1 for d in recent if d["sitc"] > 0)
+        d_pos = sum(1 for d in recent if d["dealer"] > 0)
+        scores[8] = int(s_pos >= 2 or d_pos >= 2)
+        details[8] = f"投信/自營近3日正{max(s_pos, d_pos)}/3"
+    elif n >= 10:
+        vn = sum(volume[-5:]) / 5; vp = sum(volume[-10:-5]) / 5
+        scores[8] = int(vn >= vp * 0.9)
+        details[8] = "量能穩定" if scores[8] else "量能萎縮"
+    else:
+        scores[8] = 1
+        details[8] = "無資料"
+
+    # ── D. 量價與型態（週線近似）────────────────────────────────────
+    scores[9] = int(not (wv0 > wv4_avg * 2.0 and wc0 < wc1))
+    details[9] = f"週量{'爆出' if wv0 > wv4_avg * 2 else '正常'} 週{'漲' if wc0 >= wc1 else '跌'}"
+
+    is_new_high = wh0 >= wh4
+    if is_new_high:
+        scores[10] = int(wv0 >= wv4_avg)
+        details[10] = f"創高量{'配合' if scores[10] else '不足'}"
+    else:
+        scores[10] = 1
+        details[10] = "未創高"
+
+    if n >= 5 and wc0 < wc1:
+        drop = (wc1 - wc0) / wc1 * 100
+        ma20 = sum(close[-20:]) / 20 if n >= 20 else close[-1]
+        scores[11] = int(drop < 5 and close[-1] > ma20 * 0.97)
+        details[11] = f"回檔{drop:.1f}%{' 正常' if scores[11] else ' 偏大'}"
+    else:
+        scores[11] = 1
+        details[11] = "未回檔"
+
+    total = sum(scores)
+    concl = "✅ 續抱" if total >= 9 else ("👀 觀察" if total >= 6 else "🔴 出場")
+    return {"scores": scores, "total": total, "conclusion": concl, "details": details}
+
+
+def load_checklist_from_gist(date_key: str, mode: str) -> dict:
+    gid = _get_gist_id()
+    if not gid:
+        return {}
+    try:
+        hdrs = _gh_headers()
+        r = requests.get(f"https://api.github.com/gists/{gid}", headers=hdrs, timeout=10)
+        if r.ok:
+            data = json.loads(r.json()["files"][_GIST_FILENAME]["content"])
+            return data.get(f"_checklist_{mode}", {}).get(date_key, {})
+    except Exception:
+        pass
+    return {}
+
+
+def save_checklist_to_gist(date_key: str, mode: str, results: dict):
+    gid = _get_gist_id()
+    if not gid:
+        return
+    try:
+        hdrs = _gh_headers()
+        r    = requests.get(f"https://api.github.com/gists/{gid}", headers=hdrs, timeout=10)
+        data = json.loads(r.json()["files"][_GIST_FILENAME]["content"]) if r.ok else {}
+        cl_key = f"_checklist_{mode}"
+        if cl_key not in data:
+            data[cl_key] = {}
+        data[cl_key][date_key] = results
+        if len(data[cl_key]) > 7:
+            for old in sorted(data[cl_key].keys())[:-7]:
+                del data[cl_key][old]
+        requests.patch(
+            f"https://api.github.com/gists/{gid}", headers=hdrs, timeout=10,
+            json={"files": {_GIST_FILENAME: {"content": json.dumps(data, ensure_ascii=False)}}}
+        )
+    except Exception:
+        pass
+
+
+def _render_checklist_results(results: dict, tw_list: list, us_list: list, is_daily: bool):
+    labels = ([
+        "A1 站20MA上", "A2 未跌支撐", "A3 高低墊高",
+        "B1 主力偏多", "B2 籌碼未散", "B3 無連惡化",
+        "C1 外資買",   "C2 無倒貨",   "C3 方向穩",
+        "D1 量價健康", "D2 無爆量黑", "D3 拉回量縮",
+    ] if is_daily else [
+        "A1 週線升趨", "A2 均線多頭", "A3 守住支撐",
+        "B1 週法人正", "B2 籌碼週增", "B3 籌碼集中",
+        "C1 法人連偏多", "C2 未轉賣", "C3 投信續買",
+        "D1 週量健康", "D2 創高量配", "D3 回檔正常",
+    ])
+
+    rows_html = ""
+    for sym in list(tw_list) + list(us_list):
+        if sym not in results:
+            continue
+        r       = results[sym]
+        scores  = r.get("scores", [0] * 12)
+        total   = r.get("total", 0)
+        concl   = r.get("conclusion", "—")
+        name    = TW_NAMES.get(sym, sym)
+        cc, cb  = (("#059669", "#d1fae5") if total >= 9
+                   else ("#d97706", "#fef3c7") if total >= 6
+                   else ("#dc2626", "#fee2e2"))
+        dot_a = "".join("🟢" if scores[i] else "🔴" for i in range(0, 3))
+        dot_b = "".join("🟢" if scores[i] else "🔴" for i in range(3, 6))
+        dot_c = "".join("🟢" if scores[i] else "🔴" for i in range(6, 9))
+        dot_d = "".join("🟢" if scores[i] else "🔴" for i in range(9, 12))
+        rows_html += f"""<tr>
+          <td class="left">
+            <div class="stk-code">{sym}</div>
+            <div class="stk-name">{name}</div>
+          </td>
+          <td style="text-align:center">
+            <span style="font-size:1.1rem;font-weight:800;color:{cc};
+                         background:{cb};padding:3px 10px;border-radius:20px">{total}/12</span>
+          </td>
+          <td style="text-align:center;font-weight:700;color:{cc}">{concl}</td>
+          <td style="text-align:center;font-size:0.85rem;letter-spacing:1px">{dot_a}</td>
+          <td style="text-align:center;font-size:0.85rem;letter-spacing:1px">{dot_b}</td>
+          <td style="text-align:center;font-size:0.85rem;letter-spacing:1px">{dot_c}</td>
+          <td style="text-align:center;font-size:0.85rem;letter-spacing:1px">{dot_d}</td>
+        </tr>"""
+
+    st.html(f"""
+    <div class="wl-wrap">
+    <table class="wl-table">
+      <thead><tr>
+        <th class="left">股票</th><th>得分</th><th>結論</th>
+        <th>A 趨勢</th><th>B 籌碼</th><th>C 法人</th><th>D 量價</th>
+      </tr></thead>
+      <tbody>{rows_html}</tbody>
+    </table></div>""")
+
+    with st.expander("📝 各題明細"):
+        for sym in list(tw_list) + list(us_list):
+            if sym not in results:
+                continue
+            r       = results[sym]
+            sc_list = r.get("scores", [0] * 12)
+            det     = r.get("details", [""] * 12)
+            name    = TW_NAMES.get(sym, sym)
+            st.markdown(f"**{sym} {name}**")
+            cols = st.columns(3)
+            for i, (lbl, sc, dv) in enumerate(zip(labels, sc_list, det)):
+                cols[i % 3].markdown(
+                    f"{'🟢' if sc else '🔴'} **{lbl}**<br>"
+                    f"<span style='font-size:0.82rem;color:#64748b'>{dv}</span>",
+                    unsafe_allow_html=True,
+                )
+            st.divider()
+
+
+def render_checklist_tab(tw_list: list, us_list: list):
+    today = now_tw()
+
+    c_mode, c_btn, c_info = st.columns([2, 2, 3])
+    with c_mode:
+        mode = st.radio("模式", ["📅 每日", "📆 每週"],
+                        horizontal=True, label_visibility="collapsed")
+    is_daily = (mode == "📅 每日")
+    mode_key = "daily" if is_daily else "weekly"
+
+    if is_daily:
+        date_key = today.strftime("%Y-%m-%d")
+    else:
+        iso = today.isocalendar()
+        date_key = f"{iso[0]}-W{iso[1]:02d}"
+
+    ss_key = f"cl_{mode_key}_{date_key}"
+    if ss_key not in st.session_state:
+        st.session_state[ss_key] = load_checklist_from_gist(date_key, mode_key)
+    cached = st.session_state[ss_key]
+
+    with c_btn:
+        run_btn = st.button("▶ 執行檢查", type="primary",
+                            use_container_width=True, key="cl_run")
+    with c_info:
+        if cached:
+            first = next(iter(cached), None)
+            upd   = cached.get(first, {}).get("updated", "") if first else ""
+            st.caption(f"上次更新 {upd}　{date_key}")
+        else:
+            st.caption("尚無結果，點「▶ 執行檢查」開始")
+
+    if run_btn:
+        all_syms = [(s, True) for s in tw_list] + [(s, False) for s in us_list]
+        results  = {}
+        upd_time = today.strftime("%H:%M")
+        prog     = st.progress(0, text="準備計算…")
+        for i, (sym, is_tw_sym) in enumerate(all_syms):
+            prog.progress((i + 0.5) / len(all_syms), text=f"計算 {sym}（{i + 1}/{len(all_syms)}）…")
+            try:
+                r = (calc_daily_checklist(sym, is_tw_sym)
+                     if is_daily else calc_weekly_checklist(sym, is_tw_sym))
+                r["updated"] = upd_time
+                results[sym] = r
+            except Exception as e:
+                results[sym] = {"scores": [0] * 12, "total": 0, "conclusion": "錯誤",
+                                "details": [str(e)] * 12, "updated": upd_time}
+            if is_tw_sym:
+                time.sleep(0.5)
+        prog.empty()
+        save_checklist_to_gist(date_key, mode_key, results)
+        st.session_state[ss_key] = results
+        cached = results
+        st.success(f"✅ 計算完成（{len(results)} 支）")
+
+    if cached:
+        _render_checklist_results(cached, tw_list, us_list, is_daily)
+    else:
+        st.info("點「▶ 執行檢查」開始計算，結果儲存到 Gist 供跨裝置讀取。")
+        st.markdown("""
+<div style="background:#f8fbff;border:1px solid #bfdbfe;border-radius:12px;
+            padding:16px;margin-top:12px">
+  <div style="font-weight:700;color:#1e40af;margin-bottom:8px">📊 評分說明（每日/每週各 12 題）</div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap">
+    <span style="background:#d1fae5;border:1px solid #6ee7b7;padding:4px 12px;
+                 border-radius:20px;color:#065f46;font-weight:700">✅ 9–12 分：續抱</span>
+    <span style="background:#fef3c7;border:1px solid #fcd34d;padding:4px 12px;
+                 border-radius:20px;color:#92400e;font-weight:700">👀 6–8 分：觀察</span>
+    <span style="background:#fee2e2;border:1px solid #fca5a5;padding:4px 12px;
+                 border-radius:20px;color:#991b1b;font-weight:700">🔴 0–5 分：優先出場</span>
+  </div>
+  <div style="margin-top:8px;font-size:0.86rem;color:#64748b">
+    A=趨勢 B=籌碼 C=關鍵法人 D=量價　｜　美股 B 類使用量價替代
+  </div>
+</div>""", unsafe_allow_html=True)
+
+
+# ════════════════════════════════════════════════════════════════
 def main():
     # ── 初始化 session state ──
     if "tw_list" not in st.session_state or "us_list" not in st.session_state:
@@ -1700,9 +2282,10 @@ def main():
         return
 
     # ── 台股 / 美股 tabs ──
-    tab_tw, tab_us = st.tabs([
+    tab_tw, tab_us, tab_cl = st.tabs([
         f"🇹🇼 台股（{len(tw_list)} 支）",
-        f"🇺🇸 美股（{len(us_list)} 支）"
+        f"🇺🇸 美股（{len(us_list)} 支）",
+        "📋 檢查表",
     ])
     with tab_tw:
         if tw_list:
@@ -1718,6 +2301,8 @@ def main():
             render_watchlist(us_stocks)
         else:
             st.info("美股清單是空的，請在「✏️ 編輯清單」新增。")
+    with tab_cl:
+        render_checklist_tab(tw_list, us_list)
 
     # ── 說明欄 ──
     with st.expander("📖 欄位說明 & 資料來源"):
