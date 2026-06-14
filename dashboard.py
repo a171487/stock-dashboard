@@ -1527,6 +1527,9 @@ def calc_daily_checklist(symbol: str, is_tw: bool) -> dict:
     """計算 12 題每日檢查表"""
     yf_sym  = symbol + ".TW" if is_tw else symbol
     ohlcv   = _fetch_ohlcv_for_checklist(yf_sym)
+    if not ohlcv and is_tw:
+        yf_sym = symbol + ".TWO"
+        ohlcv  = _fetch_ohlcv_for_checklist(yf_sym)
     scores  = [0] * 12
     details = [""] * 12
 
@@ -1668,6 +1671,9 @@ def calc_weekly_checklist(symbol: str, is_tw: bool) -> dict:
     """計算 12 題每週檢查表（以日線資料近似週線）"""
     yf_sym  = symbol + ".TW" if is_tw else symbol
     ohlcv   = _fetch_ohlcv_for_checklist(yf_sym)
+    if not ohlcv and is_tw:
+        yf_sym = symbol + ".TWO"
+        ohlcv  = _fetch_ohlcv_for_checklist(yf_sym)
     scores  = [0] * 12
     details = [""] * 12
 

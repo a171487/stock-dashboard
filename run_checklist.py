@@ -123,6 +123,9 @@ def parse_institutional(rows):
 def calc_daily(symbol, is_tw):
     yf_sym  = symbol + ".TW" if is_tw else symbol
     ohlcv   = fetch_ohlcv(yf_sym)
+    if not ohlcv and is_tw:
+        yf_sym = symbol + ".TWO"
+        ohlcv  = fetch_ohlcv(yf_sym)
     scores  = [0] * 12
     details = [""] * 12
 
@@ -245,6 +248,9 @@ def calc_daily(symbol, is_tw):
 def calc_weekly(symbol, is_tw):
     yf_sym = symbol + ".TW" if is_tw else symbol
     ohlcv  = fetch_ohlcv(yf_sym)
+    if not ohlcv and is_tw:
+        yf_sym = symbol + ".TWO"
+        ohlcv  = fetch_ohlcv(yf_sym)
     scores = [0] * 12; details = [""] * 12
 
     if not ohlcv or len(ohlcv.get("close", [])) < 20:
