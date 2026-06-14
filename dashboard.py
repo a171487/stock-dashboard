@@ -37,14 +37,6 @@ st.markdown("""<style>
 .stApp {
     background: linear-gradient(160deg, #eef2ff 0%, #f0f9ff 55%, #f0fdf4 100%) !important;
 }
-[data-testid="stHorizontalBlock"] {
-    flex-wrap: nowrap !important;
-    gap: 5px !important;
-}
-[data-testid="stHorizontalBlock"] > [data-testid="column"] {
-    min-width: 0 !important;
-    overflow: hidden !important;
-}
 section[data-testid="stSidebar"] > div:first-child {
     background: linear-gradient(180deg, #1e3a5f 0%, #0f2240 100%) !important;
 }
@@ -1419,23 +1411,33 @@ def _sidebar_list(wl: list[str], key_prefix: str, save_fn, name_map: dict):
             wl.pop(i); save_fn(wl); st.rerun()
 
 def _compact_edit_list(wl: list[str], key_prefix: str, save_fn, name_map: dict):
-    """緊湊版清單：代號+中文名稱 與 上/下/✕ 按鈕同行顯示。"""
+    """下拉選股 + 操作按鈕，保證手機可用。"""
+    if not wl:
+        return
     n = len(wl)
-    for i, sym in enumerate(list(wl)):
-        name = name_map.get(sym, "")
-        cn, cup, cdn, cdel = st.columns([2.8, 0.7, 0.7, 0.7])
-        cn.markdown(
-            f"<div style='padding:6px 0;line-height:1.2'>"
-            f"<span style='font-weight:700;color:#1e3a5f;font-size:0.95rem'>{sym}</span>"
-            f"<br><span style='color:#64748b;font-size:0.78rem'>{name}</span>"
-            f"</div>",
-            unsafe_allow_html=True)
-        if cup.button("上", key=f"{key_prefix}up_{sym}", disabled=(i == 0), use_container_width=True):
-            wl[i], wl[i-1] = wl[i-1], wl[i]; save_fn(wl); st.rerun()
-        if cdn.button("下", key=f"{key_prefix}dn_{sym}", disabled=(i == n-1), use_container_width=True):
-            wl[i], wl[i+1] = wl[i+1], wl[i]; save_fn(wl); st.rerun()
-        if cdel.button("✕", key=f"{key_prefix}rm_{sym}", use_container_width=True):
-            wl.pop(i); save_fn(wl); st.rerun()
+    lines = "　".join(
+        f"<span style='white-space:nowrap'>{i+1}.&nbsp;<b>{sym}</b>&nbsp;"
+        f"<span style='color:#64748b;font-size:0.8rem'>{name_map.get(sym,'')}</span></span>"
+        for i, sym in enumerate(wl)
+    )
+    st.markdown(f"<div style='font-size:0.88rem;line-height:2;margin-bottom:4px'>{lines}</div>",
+                unsafe_allow_html=True)
+    sel_idx = st.selectbox(
+        "選擇股票",
+        options=list(range(n)),
+        format_func=lambda i: f"{wl[i]}　{name_map.get(wl[i], '')}",
+        label_visibility="collapsed",
+        key=f"{key_prefix}sel",
+    )
+    b1, b2, b3 = st.columns(3)
+    if b1.button("⬆ 上移", key=f"{key_prefix}up", use_container_width=True, disabled=(sel_idx == 0)):
+        wl[sel_idx], wl[sel_idx-1] = wl[sel_idx-1], wl[sel_idx]
+        save_fn(wl); st.rerun()
+    if b2.button("⬇ 下移", key=f"{key_prefix}dn", use_container_width=True, disabled=(sel_idx == n-1)):
+        wl[sel_idx], wl[sel_idx+1] = wl[sel_idx+1], wl[sel_idx]
+        save_fn(wl); st.rerun()
+    if b3.button("🗑 刪除", key=f"{key_prefix}rm", use_container_width=True):
+        wl.pop(sel_idx); save_fn(wl); st.rerun()
 
 
 # ════════════════════════════════════════════════════════════════
