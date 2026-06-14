@@ -1410,6 +1410,23 @@ def _sidebar_list(wl: list[str], key_prefix: str, save_fn, name_map: dict):
                        use_container_width=True):
             wl.pop(i); save_fn(wl); st.rerun()
 
+def _compact_edit_list(wl: list[str], key_prefix: str, save_fn, name_map: dict):
+    """緊湊版清單（用於主畫面 tab）：代號＋中文，↑↓✕ 小按鈕。"""
+    n = len(wl)
+    for i, sym in enumerate(list(wl)):
+        cn, cup, cdn, cdel = st.columns([4, 0.55, 0.55, 0.55])
+        name = name_map.get(sym, "")
+        cn.markdown(
+            f"<span style='font-weight:700;color:#dbeafe'>{sym}</span>"
+            f"<span style='color:#94a3b8;font-size:0.8rem;margin-left:5px'>{name}</span>",
+            unsafe_allow_html=True)
+        if cup.button("↑", key=f"{key_prefix}up_{sym}", disabled=(i == 0), use_container_width=True):
+            wl[i], wl[i-1] = wl[i-1], wl[i]; save_fn(wl); st.rerun()
+        if cdn.button("↓", key=f"{key_prefix}dn_{sym}", disabled=(i == n-1), use_container_width=True):
+            wl[i], wl[i+1] = wl[i+1], wl[i]; save_fn(wl); st.rerun()
+        if cdel.button("✕", key=f"{key_prefix}rm_{sym}", use_container_width=True):
+            wl.pop(i); save_fn(wl); st.rerun()
+
 
 # ════════════════════════════════════════════════════════════════
 def main():
@@ -1560,52 +1577,47 @@ def main():
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-    # ══ 手機版：新增股票快捷區（桌機可用側欄；手機側欄預設收起）══
-    with st.expander("📱 新增 / 管理股票（手機版）", expanded=False):
-        m_col1, m_col2 = st.columns([3, 1])
-        m_code = m_col1.text_input("輸入代碼", placeholder="台股: 2330　美股: AAPL",
-                                   key="mobile_add_input", label_visibility="collapsed")
-        if m_col2.button("＋ 新增", key="mobile_add_btn", use_container_width=True):
-            code = m_code.strip().upper()
-            if code:
-                if is_tw_stock(code):
-                    if code not in tw_list:
-                        tw_list.append(code); save_tw(tw_list)
-                        fetch_stocks_batch.clear(); st.rerun()
-                    else:
-                        st.warning(f"{code} 已在台股清單")
-                else:
-                    if code not in us_list:
-                        us_list.append(code); save_us(us_list)
-                        fetch_stocks_batch.clear(); st.rerun()
-                    else:
-                        st.warning(f"{code} 已在美股清單")
-
-        # 目前清單（可刪除）
-        if tw_list or us_list:
-            st.caption("🇹🇼 台股：" + "　".join(tw_list) if tw_list else "")
-            st.caption("🇺🇸 美股：" + "　".join(us_list) if us_list else "")
-
-        # 書籤連結提示
-        st.info("💡 **儲存個人清單**：將目前頁面網址加入手機書籤，下次直接開書籤即可恢復你的清單。")
-
-    # ══ 跨裝置同步（主畫面版，手機不用開側欄）══════════════════════
+    # ══ 編輯清單 ／ 跨裝置同步（tabs）══════════════════════════════
     cur_key = st.session_state.get("profile_key", "")
-    sync_label = f"🔗 跨裝置同步　✅ 代號：{cur_key}" if cur_key else "🔗 跨裝置同步（電腦 ↔ 手機）"
-    with st.expander(sync_label, expanded=not bool(cur_key)):
-        st.markdown(
-            "電腦和手機輸入**相同代號**，清單自動同步。"
-            "　改了一台後，另一台點「**拉取更新**」即可。",
-            unsafe_allow_html=False)
+    sync_tab_label = f"🔗 同步　✅{cur_key}" if cur_key else "🔗 跨裝置同步"
+    tab_edit, tab_sync = st.tabs(["✏️ 編輯清單", sync_tab_label])
+
+    with tab_edit:
+        ea1, ea2, ea3 = st.columns([3, 1, 1])
+        add_code = ea1.text_input(
+            "股票代號", placeholder="台股：2330　美股：NVDA",
+            label_visibility="collapsed", key="tab_add_input"
+        )
+        if ea2.button("＋台股", key="tab_add_tw", use_container_width=True):
+            code = add_code.strip().upper()
+            if code and code not in tw_list:
+                tw_list.append(code); save_tw(tw_list)
+                fetch_stocks_batch.clear(); st.rerun()
+            elif code in tw_list:
+                st.warning(f"{code} 已在台股清單")
+        if ea3.button("＋美股", key="tab_add_us", use_container_width=True):
+            code = add_code.strip().upper()
+            if code and code not in us_list:
+                us_list.append(code); save_us(us_list)
+                fetch_stocks_batch.clear(); st.rerun()
+            elif code in us_list:
+                st.warning(f"{code} 已在美股清單")
+        if tw_list:
+            st.markdown("**🇹🇼 台股**")
+            _compact_edit_list(tw_list, "te_tw_", save_tw, TW_NAMES)
+        if us_list:
+            st.markdown("**🇺🇸 美股**")
+            _compact_edit_list(us_list, "te_us_", save_us, {})
+
+    with tab_sync:
+        st.markdown("電腦和手機輸入**相同代號**，清單自動同步。改了一台後，另一台點「拉取更新」即可。")
         sc1, sc2, sc3 = st.columns([3, 1, 1])
         key_input = sc1.text_input(
-            "同步代號",
-            value=cur_key,
+            "同步代號", value=cur_key,
             placeholder="自訂代號，例如 mystock88",
-            label_visibility="collapsed",
-            key="main_sync_key_input",
+            label_visibility="collapsed", key="tab_sync_key_input",
         )
-        if sc2.button("套用", key="main_sync_apply", use_container_width=True):
+        if sc2.button("套用", key="tab_sync_apply", use_container_width=True):
             nk = key_input.strip()
             if nk:
                 tw_p, us_p, ts = load_profile(nk)
@@ -1626,7 +1638,7 @@ def main():
                 st.query_params.pop("key", None)
                 st.info("已清除同步代號")
             st.rerun()
-        if sc3.button("拉取更新", key="main_sync_pull",
+        if sc3.button("拉取更新", key="tab_sync_pull",
                       use_container_width=True, disabled=not bool(cur_key)):
             tw_p, us_p, ts = load_profile(cur_key)
             if tw_p is not None:
@@ -1639,37 +1651,7 @@ def main():
             st.rerun()
         if cur_key:
             _, _, ts = load_profile(cur_key)
-            st.caption(f"上次同步：{ts}　｜　將含有 ?key={cur_key} 的網址加入書籤，下次自動載入")
-
-    # ══ 編輯清單（手機可用）══════════════════════════════════════════
-    with st.expander("✏️ 編輯清單（新增 / 刪除 / 排序）", expanded=False):
-        # 新增股票
-        st.markdown("**新增個股**")
-        ea1, ea2, ea3 = st.columns([3, 1, 1])
-        add_code = ea1.text_input(
-            "股票代號", placeholder="台股：2330　美股：NVDA",
-            label_visibility="collapsed", key="main_edit_add_input"
-        )
-        if ea2.button("＋台股", key="main_edit_add_tw", use_container_width=True):
-            code = add_code.strip().upper()
-            if code and code not in tw_list:
-                tw_list.append(code); save_tw(tw_list); st.rerun()
-        if ea3.button("＋美股", key="main_edit_add_us", use_container_width=True):
-            code = add_code.strip().upper()
-            if code and code not in us_list:
-                us_list.append(code); save_us(us_list); st.rerun()
-
-        st.markdown("---")
-
-        # 台股排序 / 刪除
-        if tw_list:
-            st.markdown("**🇹🇼 台股（↑↓ 排序　✕ 刪除）**")
-            _sidebar_list(tw_list, "me_tw_", save_tw, TW_NAMES)
-
-        # 美股排序 / 刪除
-        if us_list:
-            st.markdown("**🇺🇸 美股（↑↓ 排序　✕ 刪除）**")
-            _sidebar_list(us_list, "me_us_", save_us, {})
+            st.caption(f"上次同步：{ts}　｜　書籤請含 ?key={cur_key}")
 
     # ══ 觀察名單 ══════════════════════════════════════════════════
     st.markdown('<div class="section-hdr">👁 我的觀察名單</div>',
