@@ -1927,55 +1927,53 @@ def _render_checklist_results(results: dict, tw_list: list, us_list: list, is_da
     </table></div>""")
 
     with st.expander("📝 各題明細"):
-        for sym in list(tw_list) + list(us_list):
-            if sym not in results:
-                continue
-            r       = results[sym]
-            sc_list = r.get("scores", [0] * 12)
-            det     = r.get("details", [""] * 12)
-            name    = TW_NAMES.get(sym, sym)
-            st.markdown(f"**{sym} {name}**")
-            cols = st.columns(3)
-            for i, (lbl, sc, dv) in enumerate(zip(labels, sc_list, det)):
-                cols[i % 3].markdown(
-                    f"{'🟢' if sc else '🔴'} **{lbl}**<br>"
-                    f"<span style='font-size:0.82rem;color:#64748b'>{dv}</span>",
-                    unsafe_allow_html=True,
-                )
-            st.divider()
+        syms_with_data = [s for s in list(tw_list) + list(us_list) if s in results]
+        if syms_with_data:
+            tab_names   = [f"{s} {TW_NAMES.get(s, s)}" for s in syms_with_data]
+            detail_tabs = st.tabs(tab_names)
+            for dtab, sym in zip(detail_tabs, syms_with_data):
+                with dtab:
+                    r       = results[sym]
+                    sc_list = r.get("scores", [0] * 12)
+                    det     = r.get("details", [""] * 12)
+                    cols    = st.columns(3)
+                    for i, (lbl, sc, dv) in enumerate(zip(labels, sc_list, det)):
+                        cols[i % 3].markdown(
+                            f"{'🟢' if sc else '🔴'} **{lbl}**<br>"
+                            f"<span style='font-size:0.82rem;color:#64748b'>{dv}</span>",
+                            unsafe_allow_html=True,
+                        )
 
 
-def render_checklist_tab(tw_list: list, us_list: list):
-    today = now_tw()
-
-    c_mode, c_btn, c_info = st.columns([2, 2, 3])
-    with c_mode:
-        mode = st.radio("模式", ["📅 每日", "📆 每週"],
-                        horizontal=True, label_visibility="collapsed")
-    is_daily = (mode == "📅 每日")
-    mode_key = "daily" if is_daily else "weekly"
+def _render_checklist_mode(tw_list: list, us_list: list, mode_key: str):
+    today    = now_tw()
+    is_daily = (mode_key == "daily")
 
     if is_daily:
-        date_key = today.strftime("%Y-%m-%d")
+        date_key   = today.strftime("%Y-%m-%d")
+        sched_info = "⏰ 自動執行：台股 平日 14:00 ／ 美股 平日 07:00（台灣時間）"
     else:
-        iso = today.isocalendar()
+        iso      = today.isocalendar()
         date_key = f"{iso[0]}-W{iso[1]:02d}"
+        sched_info = "⏰ 自動執行：每週六 09:00（台灣時間）"
 
     ss_key = f"cl_{mode_key}_{date_key}"
     if ss_key not in st.session_state:
         st.session_state[ss_key] = load_checklist_from_gist(date_key, mode_key)
     cached = st.session_state[ss_key]
 
+    c_btn, c_info = st.columns([2, 4])
     with c_btn:
-        run_btn = st.button("▶ 執行檢查", type="primary",
-                            use_container_width=True, key="cl_run")
+        run_btn = st.button("▶ 手動執行檢查", type="primary",
+                            use_container_width=True, key=f"cl_run_{mode_key}")
     with c_info:
         if cached:
             first = next(iter(cached), None)
             upd   = cached.get(first, {}).get("updated", "") if first else ""
-            st.caption(f"上次更新 {upd}　{date_key}")
+            st.caption(f"上次更新：{upd}　{date_key}")
         else:
-            st.caption("尚無結果，點「▶ 執行檢查」開始")
+            st.caption("尚無資料")
+        st.caption(sched_info)
 
     if run_btn:
         all_syms = [(s, True) for s in tw_list] + [(s, False) for s in us_list]
@@ -1983,15 +1981,15 @@ def render_checklist_tab(tw_list: list, us_list: list):
         upd_time = today.strftime("%H:%M")
         prog     = st.progress(0, text="準備計算…")
         for i, (sym, is_tw_sym) in enumerate(all_syms):
-            prog.progress((i + 0.5) / len(all_syms), text=f"計算 {sym}（{i + 1}/{len(all_syms)}）…")
+            prog.progress((i + 0.5) / len(all_syms), text=f"計算 {sym}（{i+1}/{len(all_syms)}）…")
             try:
                 r = (calc_daily_checklist(sym, is_tw_sym)
                      if is_daily else calc_weekly_checklist(sym, is_tw_sym))
                 r["updated"] = upd_time
                 results[sym] = r
             except Exception as e:
-                results[sym] = {"scores": [0] * 12, "total": 0, "conclusion": "錯誤",
-                                "details": [str(e)] * 12, "updated": upd_time}
+                results[sym] = {"scores": [0]*12, "total": 0, "conclusion": "錯誤",
+                                "details": [str(e)]*12, "updated": upd_time}
             if is_tw_sym:
                 time.sleep(0.5)
         prog.empty()
@@ -2003,7 +2001,7 @@ def render_checklist_tab(tw_list: list, us_list: list):
     if cached:
         _render_checklist_results(cached, tw_list, us_list, is_daily)
     else:
-        st.info("點「▶ 執行檢查」開始計算，結果儲存到 Gist 供跨裝置讀取。")
+        st.info("尚無資料。GitHub Actions 會依排程自動執行，或點「▶ 手動執行檢查」。")
         st.markdown("""
 <div style="background:#f8fbff;border:1px solid #bfdbfe;border-radius:12px;
             padding:16px;margin-top:12px">
@@ -2020,6 +2018,14 @@ def render_checklist_tab(tw_list: list, us_list: list):
     A=趨勢 B=籌碼 C=關鍵法人 D=量價　｜　美股 B 類使用量價替代
   </div>
 </div>""", unsafe_allow_html=True)
+
+
+def render_checklist_tab(tw_list: list, us_list: list):
+    tab_d, tab_w = st.tabs(["📅 每日檢查", "📆 每週檢查"])
+    with tab_d:
+        _render_checklist_mode(tw_list, us_list, "daily")
+    with tab_w:
+        _render_checklist_mode(tw_list, us_list, "weekly")
 
 
 # ════════════════════════════════════════════════════════════════
