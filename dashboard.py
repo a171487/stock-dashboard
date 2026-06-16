@@ -1839,6 +1839,7 @@ def calc_weekly_checklist(symbol: str, is_tw: bool) -> dict:
     return {"scores": scores, "total": total, "conclusion": concl, "details": details}
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def load_checklist_from_gist(date_key: str, mode: str) -> dict:
     gid = _get_gist_id()
     if not gid:
@@ -1963,10 +1964,7 @@ def _render_checklist_mode(tw_list: list, us_list: list, mode_key: str):
         date_key = f"{iso[0]}-W{iso[1]:02d}"
         sched_info = "⏰ 自動執行：每週六 09:00（台灣時間）"
 
-    ss_key = f"cl_{mode_key}_{date_key}"
-    if ss_key not in st.session_state:
-        st.session_state[ss_key] = load_checklist_from_gist(date_key, mode_key)
-    cached = st.session_state[ss_key]
+    cached = load_checklist_from_gist(date_key, mode_key)
 
     c_btn, c_info = st.columns([2, 4])
     with c_btn:
@@ -2000,7 +1998,7 @@ def _render_checklist_mode(tw_list: list, us_list: list, mode_key: str):
                 time.sleep(0.5)
         prog.empty()
         save_checklist_to_gist(date_key, mode_key, results)
-        st.session_state[ss_key] = results
+        load_checklist_from_gist.clear()
         cached = results
         st.success(f"✅ 計算完成（{len(results)} 支）")
 
